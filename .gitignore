@@ -1,0 +1,27 @@
+# Compiled binaries
+kernel/build/
+
+# AI model files (multiple gigabytes)
+models/*.gguf
+models/*.bin
+models/*.pt
+models/*.safetensors
+
+# Python virtual environment
+shell/venv/
+
+# Build artifacts
+*.o
+*.so
+*.a
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
