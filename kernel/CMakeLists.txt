@@ -12,6 +12,7 @@ find_package(nlohmann_json REQUIRED)
 add_executable(motherbraind
     src/main.cpp
     src/vault/vault_manager.cpp
+    src/ipc/message_bus.cpp
 )
 
 target_include_directories(motherbraind PRIVATE
