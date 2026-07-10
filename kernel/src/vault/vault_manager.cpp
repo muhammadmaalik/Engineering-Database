@@ -1,6 +1,7 @@
 #include "vault/vault_manager.hpp"
 #include <fstream>
 #include <iostream>
+#include <chrono>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -19,7 +20,6 @@ VaultManager::~VaultManager() {
 }
 
 bool VaultManager::initialize() {
-    // Create vault directory structure if it doesn't exist
     std::vector<fs::path> dirs = {
         vault_root_ / "projects",
         vault_root_ / "shared" / "base_models",
@@ -35,7 +35,6 @@ bool VaultManager::initialize() {
         }
     }
 
-    // Open SQLite database
     fs::path db_path = vault_root_ / "vault_index.db";
     int rc = sqlite3_open(db_path.c_str(), &db_);
     if (rc != SQLITE_OK) {
@@ -43,7 +42,6 @@ bool VaultManager::initialize() {
         return false;
     }
 
-    // Enable WAL mode for concurrent reads
     sqlite3_exec(db_, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
 
     if (!create_tables()) {
@@ -114,6 +112,22 @@ bool VaultManager::create_tables() {
         CREATE VIRTUAL TABLE IF NOT EXISTS projects_fts USING fts5(
             id, name, description, tags, content='projects', content_rowid='rowid'
         );
+
+        CREATE TABLE IF NOT EXISTS message_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            source_id INTEGER NOT NULL,
+            target_id INTEGER NOT NULL,
+            type INTEGER NOT NULL,
+            type_name TEXT NOT NULL,
+            payload TEXT,
+            payload_size INTEGER,
+            project_id TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_msg_log_timestamp ON message_log(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_msg_log_type ON message_log(type);
+        CREATE INDEX IF NOT EXISTS idx_msg_log_project ON message_log(project_id);
     )";
 
     char* err_msg = nullptr;
@@ -176,7 +190,6 @@ bool VaultManager::parse_and_index_manifest(const fs::path& manifest_path) {
         return false;
     }
 
-    // Project info
     std::string project_id = manifest["project"]["id"].get<std::string>();
     std::string project_name = manifest["project"]["name"].get<std::string>();
     std::string description = manifest["project"].value("description", "");
@@ -194,7 +207,6 @@ bool VaultManager::parse_and_index_manifest(const fs::path& manifest_path) {
 
     std::string project_path = manifest_path.parent_path().string();
 
-    // Insert project
     std::string insert_project = 
         "INSERT OR REPLACE INTO projects (id, name, description, status, path, tags, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?);";
@@ -212,7 +224,6 @@ bool VaultManager::parse_and_index_manifest(const fs::path& manifest_path) {
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 
-    // FTS index
     std::string insert_fts =
         "INSERT OR REPLACE INTO projects_fts (rowid, id, name, description, tags) "
         "VALUES ((SELECT rowid FROM projects WHERE id = ?), ?, ?, ?, ?);";
@@ -225,7 +236,6 @@ bool VaultManager::parse_and_index_manifest(const fs::path& manifest_path) {
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 
-    // Devices
     if (manifest["hardware"].contains("devices")) {
         for (const auto& dev : manifest["hardware"]["devices"]) {
             std::string dev_id = dev["device_id"].get<std::string>();
@@ -256,7 +266,6 @@ bool VaultManager::parse_and_index_manifest(const fs::path& manifest_path) {
         }
     }
 
-    // Models
     if (manifest["ai"].contains("models")) {
         for (const auto& model : manifest["ai"]["models"]) {
             std::string model_id = model["model_id"].get<std::string>();
@@ -280,7 +289,6 @@ bool VaultManager::parse_and_index_manifest(const fs::path& manifest_path) {
         }
     }
 
-    // Datasets
     if (manifest["datasets"].contains("collections")) {
         for (const auto& ds : manifest["datasets"]["collections"]) {
             std::string ds_name = ds["name"].get<std::string>();
@@ -313,7 +321,6 @@ bool VaultManager::parse_and_index_manifest(const fs::path& manifest_path) {
         }
     }
 
-    // Simulation runs
     if (manifest["simulation"].contains("environments")) {
         for (const auto& env : manifest["simulation"]["environments"]) {
             if (env.contains("training_runs")) {
@@ -344,7 +351,6 @@ bool VaultManager::parse_and_index_manifest(const fs::path& manifest_path) {
     return true;
 }
 
-// Query implementations
 std::vector<ProjectInfo> VaultManager::list_projects() const {
     std::vector<ProjectInfo> results;
     const char* sql = "SELECT id, name, description, status, path FROM projects;";
@@ -355,7 +361,8 @@ std::vector<ProjectInfo> VaultManager::list_projects() const {
         ProjectInfo info;
         info.id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
         info.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        info.description = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2) ? reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2)) : "");
+        const unsigned char* desc = sqlite3_column_text(stmt, 2);
+        info.description = desc ? reinterpret_cast<const char*>(desc) : "";
         info.status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
         info.path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
         results.push_back(info);
@@ -375,7 +382,8 @@ std::optional<ProjectInfo> VaultManager::get_project(const std::string& project_
         ProjectInfo info;
         info.id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
         info.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        info.description = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2) ? reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2)) : "");
+        const unsigned char* desc = sqlite3_column_text(stmt, 2);
+        info.description = desc ? reinterpret_cast<const char*>(desc) : "";
         info.status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
         info.path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
         result = info;
@@ -416,7 +424,8 @@ std::vector<ModelInfo> VaultManager::get_models(const std::string& project_id) c
         info.model_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
         info.base_model = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
         info.role = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-        info.lora_adapter_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3) ? reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3)) : "");
+        const unsigned char* lora = sqlite3_column_text(stmt, 3);
+        info.lora_adapter_path = lora ? reinterpret_cast<const char*>(lora) : "";
         info.project_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
         results.push_back(info);
     }
@@ -436,7 +445,8 @@ std::vector<DatasetInfo> VaultManager::get_datasets(const std::string& project_i
         info.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
         info.source = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
         info.format = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-        info.path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3) ? reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3)) : "");
+        const unsigned char* path = sqlite3_column_text(stmt, 3);
+        info.path = path ? reinterpret_cast<const char*>(path) : "";
         info.project_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
         results.push_back(info);
     }
@@ -458,7 +468,8 @@ std::vector<ProjectInfo> VaultManager::search(const std::string& query) const {
         ProjectInfo info;
         info.id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
         info.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        info.description = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2) ? reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2)) : "");
+        const unsigned char* desc = sqlite3_column_text(stmt, 2);
+        info.description = desc ? reinterpret_cast<const char*>(desc) : "";
         info.status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
         info.path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
         results.push_back(info);
@@ -467,6 +478,82 @@ std::vector<ProjectInfo> VaultManager::search(const std::string& query) const {
     return results;
 }
 
+bool VaultManager::log_message(uint32_t source_id, uint32_t target_id, uint8_t type,
+                                const std::string& type_name, const std::string& payload,
+                                const std::string& project_id) {
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    std::string timestamp = std::ctime(&time_t_now);
+    if (!timestamp.empty() && timestamp.back() == '\n') {
+        timestamp.pop_back();
+    }
+
+    const char* sql = "INSERT INTO message_log (timestamp, source_id, target_id, type, type_name, payload, payload_size, project_id) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?);";
+
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, timestamp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 2, source_id);
+    sqlite3_bind_int64(stmt, 3, target_id);
+    sqlite3_bind_int(stmt, 4, type);
+    sqlite3_bind_text(stmt, 5, type_name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 6, payload.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 7, payload.size());
+    sqlite3_bind_text(stmt, 8, project_id.empty() ? nullptr : project_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return rc == SQLITE_DONE;
+}
+
+bool VaultManager::export_messages(const std::string& output_path,
+                                    const std::string& project_id,
+                                    const std::string& type_filter) {
+    std::string sql = "SELECT timestamp, source_id, target_id, type_name, payload FROM message_log WHERE 1=1";
+    
+    if (!project_id.empty()) {
+        sql += " AND project_id = '" + project_id + "'";
+    }
+    if (!type_filter.empty()) {
+        sql += " AND type_name = '" + type_filter + "'";
+    }
+    sql += " ORDER BY timestamp;";
+
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
+
+    std::ofstream out(output_path);
+    if (!out.is_open()) {
+        std::cerr << "[VAULT] Cannot open export file: " << output_path << std::endl;
+        sqlite3_finalize(stmt);
+        return false;
+    }
+
+    int count = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        std::string timestamp = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        uint32_t source = sqlite3_column_int64(stmt, 1);
+        uint32_t target = sqlite3_column_int64(stmt, 2);
+        std::string type_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        std::string payload = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4) ? reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4)) : "");
+
+        out << "{"
+            << "\"timestamp\": \"" << timestamp << "\", "
+            << "\"source\": " << source << ", "
+            << "\"target\": " << target << ", "
+            << "\"type\": \"" << type_name << "\", "
+            << "\"payload\": \"" << payload << "\""
+            << "}" << std::endl;
+        count++;
+    }
+
+    sqlite3_finalize(stmt);
+    out.close();
+    std::cout << "[VAULT] Exported " << count << " messages to " << output_path << std::endl;
+    return true;
+}
+
 } // namespace vault
 } // namespace motherbrain
-

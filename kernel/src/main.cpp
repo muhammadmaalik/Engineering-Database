@@ -1,4 +1,5 @@
 #include "ipc/message_bus.hpp"
+#include "ipc/message_protocol.hpp"
 #include "vault/vault_manager.hpp"
 #include <iostream>
 #include <string>
@@ -54,10 +55,15 @@ int main() {
     }
 
     bus.on_message(ipc::ADDR_BROADCAST, [&vault](const ipc::Message& msg) {
-        if (msg.header.type == ipc::MessageType::LOG) {
-            std::string log_msg(reinterpret_cast<const char*>(msg.payload()), msg.header.payload_length);
-            std::cout << "[LOG] " << log_msg << std::endl;
-        }
+        std::string payload_str(reinterpret_cast<const char*>(msg.payload()), msg.header.payload_length);
+        
+        vault.log_message(
+            msg.header.source_id,
+            msg.header.target_id,
+            static_cast<uint8_t>(msg.header.type),
+            ipc::message_type_name(msg.header.type),
+            payload_str
+        );
     });
 
     std::cout << "[STATUS] Kernel running. Press Ctrl+C to stop." << std::endl;

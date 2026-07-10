@@ -5,6 +5,7 @@
 #include <vector>
 #include <filesystem>
 #include <optional>
+#include <chrono>
 
 namespace motherbrain {
 namespace vault {
@@ -57,6 +58,14 @@ public:
     std::vector<ModelInfo> get_models(const std::string& project_id) const;
     std::vector<DatasetInfo> get_datasets(const std::string& project_id) const;
     std::vector<ProjectInfo> search(const std::string& query) const;
+
+    bool log_message(uint32_t source_id, uint32_t target_id, uint8_t type, 
+                     const std::string& type_name, const std::string& payload,
+                     const std::string& project_id = "");
+
+    bool export_messages(const std::string& output_path, 
+                        const std::string& project_id = "",
+                        const std::string& type_filter = "");
 
     const fs::path& root_path() const { return vault_root_; }
 
