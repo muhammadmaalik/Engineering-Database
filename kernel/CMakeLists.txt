@@ -9,14 +9,15 @@ find_package(Boost REQUIRED COMPONENTS system)
 find_package(SQLite3 REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
-# The kernel daemon
+set(LLAMA_DIR "$ENV{HOME}/llama.cpp")
+
 add_executable(motherbraind
     src/main.cpp
     src/vault/vault_manager.cpp
     src/ipc/message_bus.cpp
+    src/ai/inference_engine.cpp
 )
 
-# Test harness for injecting messages
 add_executable(test_sender
     src/test_sender.cpp
     src/ipc/message_bus.cpp
@@ -25,6 +26,10 @@ add_executable(test_sender
 target_include_directories(motherbraind PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${SQLite3_INCLUDE_DIRS}
+    ${LLAMA_DIR}/include
+    ${LLAMA_DIR}/common
+    ${LLAMA_DIR}/ggml/include
+    ${LLAMA_DIR}/build/src
 )
 
 target_include_directories(test_sender PRIVATE
@@ -34,6 +39,8 @@ target_include_directories(test_sender PRIVATE
 target_link_libraries(motherbraind PRIVATE
     Boost::system
     SQLite::SQLite3
+    ${LLAMA_DIR}/build/bin/libllama.so
+    pthread
 )
 
 target_link_libraries(test_sender PRIVATE
