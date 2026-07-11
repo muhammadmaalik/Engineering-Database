@@ -25,3 +25,8 @@ Thumbs.db
 
 # Logs
 *.log
+*.safetensors
+shell/training_output/
+shell/unsloth_compiled_cache/
+shell/venv/
+*.key
