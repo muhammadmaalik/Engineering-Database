@@ -1,0 +1,3 @@
+{"timestamp": "Fri Jul 10 08:17:33 2026", "type": "QUERY", "payload": "Hello from test sender, message #1", "label": "good"}
+{"timestamp": "Fri Jul 10 08:17:33 2026", "type": "HEARTBEAT", "payload": "alive", "label": "corrected", "correction": "hello! i acknowledge your transmission on the motherbrain bus."}
+{"timestamp": "Fri Jul 10 08:17:37 2026", "type": "QUERY", "payload": "Hello from test sender, message #3", "label": "corrected", "correction": "message received on the ipc bus. ready for processing."}

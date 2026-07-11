@@ -23,6 +23,11 @@ add_executable(test_sender
     src/ipc/message_bus.cpp
 )
 
+add_executable(chat_sender
+    src/chat_sender.cpp
+    src/ipc/message_bus.cpp
+)
+
 target_include_directories(motherbraind PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${SQLite3_INCLUDE_DIRS}
@@ -33,6 +38,10 @@ target_include_directories(motherbraind PRIVATE
 )
 
 target_include_directories(test_sender PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+target_include_directories(chat_sender PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
 
@@ -47,5 +56,10 @@ target_link_libraries(test_sender PRIVATE
     Boost::system
 )
 
+target_link_libraries(chat_sender PRIVATE
+    Boost::system
+)
+
 target_compile_options(motherbraind PRIVATE -Wall -Wextra -Wpedantic -Werror)
 target_compile_options(test_sender PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_compile_options(chat_sender PRIVATE -Wall -Wextra -Wpedantic -Werror)

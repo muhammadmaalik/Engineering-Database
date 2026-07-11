@@ -23,7 +23,7 @@ def get_db():
 
 def show_dashboard():
     print("=" * 50)
-    print("        MOTHERBRAIN SHELL v0.3.0")
+    print("        MOTHERBRAIN SHELL v0.4.0")
     print("=" * 50)
 
     db = get_db()
@@ -45,6 +45,12 @@ def show_dashboard():
         print(f"  Models registered: {models}")
     except sqlite3.OperationalError:
         print(f"  Models registered: 0")
+
+    try:
+        pairs = db.execute("SELECT COUNT(*) FROM conversation_pairs").fetchone()[0]
+        print(f"  Conversation pairs: {pairs}")
+    except sqlite3.OperationalError:
+        print(f"  Conversation pairs: 0 (run 'pairs' first)")
 
     types = db.execute(
         "SELECT type_name, COUNT(*) as cnt FROM message_log GROUP BY type_name ORDER BY cnt DESC LIMIT 5"
@@ -190,6 +196,83 @@ def curate_messages():
     db.close()
 
 
+def build_conversation_pairs():
+    """Pair QUERY messages with their RESPONSE messages into complete training examples."""
+    db = get_db()
+
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS conversation_pairs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            query_id INTEGER,
+            response_id INTEGER,
+            query_text TEXT,
+            response_text TEXT,
+            paired_at TEXT,
+            curated_label TEXT,
+            curated_correction TEXT,
+            FOREIGN KEY (query_id) REFERENCES message_log(id),
+            FOREIGN KEY (response_id) REFERENCES message_log(id)
+        )
+    """)
+
+    rows = db.execute("""
+        SELECT q.id, q.timestamp, q.payload, r.id, r.payload
+        FROM message_log q
+        JOIN message_log r ON r.id = q.id + 1
+        WHERE q.type_name = 'QUERY'
+        AND r.type_name = 'RESPONSE'
+        AND q.id NOT IN (SELECT query_id FROM conversation_pairs WHERE query_id IS NOT NULL)
+        ORDER BY q.timestamp
+    """).fetchall()
+
+    count = 0
+    for q_id, q_ts, q_payload, r_id, r_payload in rows:
+        db.execute(
+            "INSERT INTO conversation_pairs (query_id, response_id, query_text, response_text, paired_at) VALUES (?, ?, ?, ?, ?)",
+            (q_id, r_id, q_payload, r_payload, datetime.now().isoformat())
+        )
+        count += 1
+
+    db.commit()
+
+    total = db.execute("SELECT COUNT(*) FROM conversation_pairs").fetchone()[0]
+    print(f"[SHELL] Paired {count} new conversations. Total pairs: {total}")
+    db.close()
+
+
+def export_pairs(output_path=None):
+    """Export conversation pairs as complete training JSONL."""
+    db = get_db()
+
+    if not output_path:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = f"pairs_{ts}.jsonl"
+
+    try:
+        rows = db.execute("""
+            SELECT query_text, response_text, curated_label, curated_correction
+            FROM conversation_pairs
+            ORDER BY id
+        """).fetchall()
+    except sqlite3.OperationalError:
+        print("[SHELL] No conversation pairs. Run 'pairs' first.")
+        db.close()
+        return None
+
+    with open(output_path, 'w') as f:
+        for query, response, label, correction in rows:
+            record = {
+                "instruction": query,
+                "output": correction if correction else response,
+                "label": label or "none"
+            }
+            f.write(json.dumps(record) + '\n')
+
+    print(f"[SHELL] Exported {len(rows)} pairs to {output_path}")
+    db.close()
+    return output_path
+
+
 # ─── MODEL REGISTRY ───────────────────────────────────────────
 
 def init_model_registry():
@@ -226,7 +309,6 @@ def model_download(repo_id, quantization=None):
             print(f"[SHELL] No GGUF files found in {repo_id}")
             return
 
-        # If quantization specified, filter
         if quantization:
             gguf_files = [f for f in gguf_files if quantization.upper() in f.upper()]
 
@@ -234,10 +316,8 @@ def model_download(repo_id, quantization=None):
             print(f"[SHELL] No GGUF files matching quantization '{quantization}'")
             return
 
-        # Show options
         print(f"[SHELL] Found {len(gguf_files)} matching files:")
         for i, f in enumerate(gguf_files):
-            size_mb = "unknown"
             print(f"  [{i}] {f}")
 
         if len(gguf_files) == 1:
@@ -261,10 +341,7 @@ def model_download(repo_id, quantization=None):
             )
             print(f"[SHELL] Downloaded to {dest}")
 
-        # Register in database
         model_id = filename.replace('.gguf', '')
-        name_parts = repo_id.split('/')
-        model_name = name_parts[-1] if len(name_parts) > 1 else repo_id
         size_bytes = dest.stat().st_size if dest.exists() else 0
         size_mb = size_bytes / (1024 * 1024)
 
@@ -274,7 +351,7 @@ def model_download(repo_id, quantization=None):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             model_id,
-            model_name,
+            repo_id.split('/')[-1],
             repo_id,
             str(dest),
             quantization or "unknown",
@@ -391,7 +468,9 @@ def interactive_mode():
             print("Commands:")
             print("  dashboard   - Show system overview")
             print("  curate      - Review and label messages for training")
-            print("  export [label] [path] - Export curated data as JSONL")
+            print("  pairs       - Build query+response conversation pairs")
+            print("  export      - Export curated data as JSONL")
+            print("  exportpairs - Export conversation pairs as training JSONL")
             print("  model download <huggingface/repo> [quant] - Download a GGUF model")
             print("  model list  - List registered models")
             print("  model info <id> - Show model details")
@@ -403,10 +482,15 @@ def interactive_mode():
             show_dashboard()
         elif action == "curate":
             curate_messages()
+        elif action == "pairs":
+            build_conversation_pairs()
         elif action == "export":
             label = parts[1] if len(parts) > 1 else None
             path = parts[2] if len(parts) > 2 else None
             export_training_data(path, label)
+        elif action == "exportpairs":
+            path = parts[1] if len(parts) > 1 else None
+            export_pairs(path)
         elif action == "model":
             if len(parts) > 1:
                 sub = parts[1].lower()
@@ -445,9 +529,14 @@ def interactive_mode():
                 curated = db.execute("SELECT COUNT(*) FROM curation").fetchone()[0]
             except:
                 curated = 0
+            try:
+                pairs = db.execute("SELECT COUNT(*) FROM conversation_pairs").fetchone()[0]
+            except:
+                pairs = 0
             print(f"  Total messages: {total}")
             print(f"  Curated: {curated}")
-            print(f"  Remaining: {total - curated}")
+            print(f"  Conversation pairs: {pairs}")
+            print(f"  Remaining to curate: {total - curated}")
             db.close()
         else:
             print(f"Unknown command: {action}")
@@ -460,10 +549,15 @@ if __name__ == "__main__":
             show_dashboard()
         elif cmd == "curate":
             curate_messages()
+        elif cmd == "pairs":
+            build_conversation_pairs()
         elif cmd == "export":
             label = sys.argv[2] if len(sys.argv) > 2 else None
             path = sys.argv[3] if len(sys.argv) > 3 else None
             export_training_data(path, label)
+        elif cmd == "exportpairs":
+            path = sys.argv[2] if len(sys.argv) > 2 else None
+            export_pairs(path)
         elif cmd == "model":
             sub = sys.argv[2] if len(sys.argv) > 2 else None
             if sub == "list":
@@ -480,3 +574,4 @@ if __name__ == "__main__":
             print(f"Unknown command: {cmd}")
     else:
         interactive_mode()
+ENDOFPYTHON
