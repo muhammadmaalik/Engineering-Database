@@ -35,3 +35,9 @@ shell/training_output/
 shell/unsloth_compiled_cache/
 shell/venv/
 *.key
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.class
+

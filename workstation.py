@@ -2,30 +2,37 @@
 """
 Motherbrain Workstation v2.1 - Performance Optimized
 Fixed: threading, UI lag, CAD viewer, tree lazy-loading
+Wired to companion core (context, tools, inference, models, sync, flywheel).
 """
 
 import tkinter as tk
 from tkinter import scrolledtext, messagebox, ttk, filedialog, simpledialog
-import threading, requests, json, subprocess, sqlite3, time, webbrowser, os, sys, shutil
+import threading, json, subprocess, sqlite3, time, webbrowser, os, sys, shutil
 from pathlib import Path
 from datetime import datetime
 from queue import Queue, Empty
 
-# ─── Paths ───────────────────────────────────────────────────
-VAULT_DB = Path.home() / ".motherbrain" / "vault" / "vault_index.db"
-VAULT_ROOT = Path.home() / ".motherbrain" / "vault"
-PROJECTS_DIR = VAULT_ROOT / "projects"
-MODELS_DIR = VAULT_ROOT / "shared" / "base_models"
-ADAPTERS_DIR = VAULT_ROOT / "shared" / "adapters"
-DATASETS_DIR = VAULT_ROOT / "shared" / "global_datasets"
-EXPORTS_DIR = VAULT_ROOT / "shared" / "exports"
-SCREENSHOTS_DIR = VAULT_ROOT / "shared" / "screenshots"
-DEFAULT_MODEL = MODELS_DIR / "gemma-2-9b-it-Q5_K_M.gguf"
-LLAMA_SERVER = Path.home() / "llama.cpp" / "build" / "bin" / "llama-server"
-SERVER_URL = "http://127.0.0.1:8081/completion"
+from core import paths as mb_paths
+from core import context as mb_context
+from core import tools as mb_tools
+from core import inference as mb_inference
+from core import models as mb_models
+from core import sync as mb_sync
+from core import vault_index as mb_vault
+from core import flywheel as mb_flywheel
 
-for d in [MODELS_DIR, ADAPTERS_DIR, DATASETS_DIR, EXPORTS_DIR, SCREENSHOTS_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
+# ─── Paths (from companion core) ─────────────────────────────
+mb_paths.ensure_dirs()
+mb_vault.ensure_tables()
+
+VAULT_DB = mb_paths.VAULT_DB
+VAULT_ROOT = mb_paths.VAULT_ROOT
+PROJECTS_DIR = mb_paths.PROJECTS_DIR
+MODELS_DIR = mb_paths.MODELS_DIR
+ADAPTERS_DIR = mb_paths.ADAPTERS_DIR
+DATASETS_DIR = mb_paths.DATASETS_DIR
+EXPORTS_DIR = mb_paths.EXPORTS_DIR
+SCREENSHOTS_DIR = mb_paths.SCREENSHOTS_DIR
 
 # ─── Colors ──────────────────────────────────────────────────
 BG, PANEL_BG, CHAT_BG, SIDEBAR_BG = "#1a1a1a", "#222222", "#282828", "#1e1e1e"
@@ -41,7 +48,6 @@ class Workstation:
         self.root.configure(bg=BG)
         self.root.minsize(1100, 600)
         
-        self.server_process = None
         self.server_ready = False
         self.math_mode = False
         self.last_ai_response = ""
@@ -53,6 +59,7 @@ class Workstation:
         self.chat_context = []
         self.ui_queue = Queue()
         self._after_id = None
+        self.sync_status_text = "● Sync —"
         
         # Start UI poller
         self._poll_ui_queue()
@@ -69,6 +76,10 @@ class Workstation:
         self.top_status.pack(side=tk.RIGHT, padx=10)
         tk.Button(topbar, text="⚡ Start AI", command=lambda: threading.Thread(target=self.start_ai_server, daemon=True).start(),
                  bg="#2a5a2a", fg=TEXT_COLOR, font=("Consolas", 8), relief=tk.FLAT, cursor="hand2", padx=8).pack(side=tk.RIGHT, padx=5)
+        self.sync_status = tk.Label(topbar, text=self.sync_status_text, fg=DIM, bg=HEADER_BG, font=("Consolas", 9))
+        self.sync_status.pack(side=tk.RIGHT, padx=8)
+        tk.Button(topbar, text="🔄 Sync Now", command=lambda: threading.Thread(target=self.run_sync_now, daemon=True).start(),
+                 bg="#2a3a5a", fg=TEXT_COLOR, font=("Consolas", 8), relief=tk.FLAT, cursor="hand2", padx=8).pack(side=tk.RIGHT, padx=5)
         
         # ─── MAIN LAYOUT ──────────────────────────────────────
         self.main_paned = tk.PanedWindow(root, orient=tk.HORIZONTAL, bg=BORDER, sashwidth=3)
@@ -147,6 +158,7 @@ class Workstation:
         self.bottom_bar.pack(fill=tk.X, side=tk.BOTTOM)
         
         threading.Thread(target=self.start_ai_server, daemon=True).start()
+        threading.Thread(target=self.refresh_sync_status, daemon=True).start()
         self.show_chat()
     
     # ═══════════════════════════════════════════════════════════
@@ -276,32 +288,63 @@ AVAILABLE: ls, cd, pwd, cat, mkdir, rm, cp, mv, python, pip
             self.ui_call(self.terminal_text.insert, tk.END, f"[Error: {e}]\n", "error")
     
     # ═══════════════════════════════════════════════════════════
-    # AI SERVER
+    # AI SERVER + SYNC
     # ═══════════════════════════════════════════════════════════
     
     def start_ai_server(self):
         self.ui_call(self.top_status.config, {"text": "● Starting...", "fg": WARN})
-        model = DEFAULT_MODEL
-        if not model.exists():
-            self.ui_call(self.top_status.config, {"text": "● No Model", "fg": "#ff4444"}); return
         try:
-            if self.server_process: self.server_process.terminate()
-        except: pass
-        try:
-            self.server_process = subprocess.Popen(
-                [str(LLAMA_SERVER), "-m", str(model), "--host", "127.0.0.1", "--port", "8081", "-ngl", "99", "-c", "8192"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            for _ in range(90):
-                try:
-                    r = requests.post(SERVER_URL, json={"prompt":"test","n_predict":1,"temperature":0.7}, timeout=3)
-                    if r.status_code == 200:
-                        self.server_ready = True
-                        self.ui_call(self.top_status.config, {"text": "● AI Ready", "fg": AI_COLOR})
-                        return
-                except: pass
-                time.sleep(1)
+            ok = mb_inference.start_server()
+            if ok or mb_inference.is_ready():
+                self.server_ready = True
+                active = mb_models.get_active_model()
+                label = active.get("filename") or "AI"
+                self.ui_call(self.top_status.config, {"text": f"● AI Ready ({label})", "fg": AI_COLOR})
+            else:
+                self.server_ready = False
+                self.ui_call(self.top_status.config, {"text": "● AI Offline", "fg": "#ff4444"})
+        except FileNotFoundError as e:
+            self.server_ready = False
+            self.ui_call(self.top_status.config, {"text": "● No Model", "fg": "#ff4444"})
+            self.set_bottom(str(e))
         except Exception as e:
+            self.server_ready = False
             self.ui_call(self.top_status.config, {"text": "● Error", "fg": "#ff4444"})
+            self.set_bottom(f"AI start error: {e}")
+
+    def refresh_sync_status(self):
+        cfg = mb_paths.load_config()
+        url = mb_paths.sync_server_url(cfg)
+        try:
+            client = mb_sync.SyncClient()
+            health = client.health()
+            msg = f"● Sync OK ({url})"
+            color = AI_COLOR
+            if isinstance(health, dict) and health.get("status"):
+                msg = f"● Sync {health.get('status')} ({url})"
+        except Exception:
+            msg = f"● Sync offline ({url})"
+            color = "#ff4444"
+        self.sync_status_text = msg
+        self.ui_call(self.sync_status.config, {"text": msg, "fg": color})
+
+    def run_sync_now(self):
+        self.ui_call(self.sync_status.config, {"text": "● Syncing...", "fg": WARN})
+        self.set_bottom("Sync in progress...")
+        try:
+            result = mb_sync.SyncClient().sync_all()
+            pulled = result.get("pull", {}).get("count", 0)
+            pushed = result.get("push", {}).get("count", len(result.get("push", {}).get("pushed", []) or []))
+            conflicts = len(result.get("conflicts") or [])
+            msg = f"● Sync done (↓{pulled} ↑{pushed}"
+            if conflicts:
+                msg += f" !{conflicts}"
+            msg += ")"
+            self.ui_call(self.sync_status.config, {"text": msg, "fg": AI_COLOR})
+            self.set_bottom(f"Sync complete: pulled={pulled} pushed={pushed} conflicts={conflicts}")
+        except Exception as e:
+            self.ui_call(self.sync_status.config, {"text": "● Sync failed", "fg": "#ff4444"})
+            self.set_bottom(f"Sync error: {e}")
     
     # ═══════════════════════════════════════════════════════════
     # AI CHAT (optimized)
@@ -318,6 +361,8 @@ AVAILABLE: ls, cd, pwd, cat, mkdir, rm, cp, mv, python, pip
         tk.Button(toolbar, text="∑ Math", command=self.chat_toggle_math, bg="#444", fg=TEXT_COLOR,
                  font=("Segoe UI", 8), relief=tk.FLAT, cursor="hand2", padx=10).pack(side=tk.LEFT, padx=3)
         tk.Button(toolbar, text="📋 Copy", command=self.copy_last_response, bg="#444", fg=TEXT_COLOR,
+                 font=("Segoe UI", 8), relief=tk.FLAT, cursor="hand2", padx=10).pack(side=tk.LEFT, padx=3)
+        tk.Button(toolbar, text="⭐ Mark good for training", command=self.mark_good_for_training, bg="#5a4a2a", fg=TEXT_COLOR,
                  font=("Segoe UI", 8), relief=tk.FLAT, cursor="hand2", padx=10).pack(side=tk.LEFT, padx=3)
         
         self.chat_display = scrolledtext.ScrolledText(
@@ -368,33 +413,35 @@ AVAILABLE: ls, cd, pwd, cat, mkdir, rm, cp, mv, python, pip
     
     def chat_get_response(self, text):
         try:
-            ctx = f"[Project: {self.current_project_name}]\n" if self.current_project else ""
-            for turn in self.chat_context[-6:]:
-                ctx += f"User: {turn['user']}\nAssistant: {turn['ai']}\n"
-            prompt = f"{ctx}User: {text}\nAssistant:"
-            
-            resp = requests.post(SERVER_URL, json={"prompt": prompt, "n_predict": 2048, "temperature": 0.7}, timeout=180)
-            if resp.status_code == 200:
-                data = resp.json()
-                ai = data.get("content","").strip()
-                if ai.startswith("User:") or ai.startswith("Assistant:"):
-                    ai = ai.split("\n",1)[-1] if "\n" in ai else ai
-                self.last_ai_response = ai
-                self.chat_context.append({"user": text, "ai": ai})
-                self.ui_call(self.chat_add, "ai", ai or "(empty)")
-                self._log_chat(text, ai)
-                if self.math_mode: self.ui_call(self.render_math, ai)
+            media_note = ""
+            if self.photo_path:
+                media_note = f"[Attached image: {Path(self.photo_path).name}]"
+            prompt = mb_context.build_chat_prompt(
+                text,
+                project_id=self.current_project,
+                history=self.chat_context,
+                media_note=media_note,
+            )
+            ai = mb_tools.run_with_tools(prompt, mb_inference.complete)
+            ai = mb_tools.extract_final_text(ai) or (ai or "").strip()
+            self.last_ai_response = ai
+            self.chat_context.append({"user": text, "ai": ai})
+            self.ui_call(self.chat_add, "ai", ai or "(empty)")
+            mb_flywheel.log_turn(text, ai, self.current_project)
+            if self.math_mode:
+                self.ui_call(self.render_math, ai)
         except Exception as e:
             self.ui_call(self.chat_add, "system", f"Error: {e}")
-    
-    def _log_chat(self, q, r):
+
+    def mark_good_for_training(self):
         try:
-            db = self.get_db()
-            ts = datetime.now().strftime("%c")
-            db.execute("INSERT INTO message_log VALUES (NULL,?,0,0,3,'QUERY',?,?,?)", (ts, q, len(q), self.current_project))
-            db.execute("INSERT INTO message_log VALUES (NULL,?,0,0,3,'RESPONSE',?,?,?)", (ts, r, len(r), self.current_project))
-            db.commit(); db.close()
-        except: pass
+            ids = mb_flywheel.mark_good()
+            if ids:
+                self.chat_add("system", f"Marked good for training (ids: {', '.join(map(str, ids))}).")
+            else:
+                self.chat_add("system", "Nothing to mark — send a chat turn first.")
+        except Exception as e:
+            self.chat_add("system", f"Mark failed: {e}")
     
     def chat_toggle_math(self):
         self.math_mode = not self.math_mode
@@ -451,12 +498,14 @@ AVAILABLE: ls, cd, pwd, cat, mkdir, rm, cp, mv, python, pip
     
     def _run_photo_analysis(self):
         try:
-            prompt = f"[Image: {Path(self.photo_path).name}, {Path(self.photo_path).stat().st_size/1024:.1f}KB. Describe what this image likely contains based on filename and context.]"
-            resp = requests.post(SERVER_URL, json={"prompt": f"User: {prompt}\nAssistant:", "n_predict": 1024, "temperature": 0.7}, timeout=120)
-            if resp.status_code == 200:
-                data = resp.json()
-                self.ui_call(self.photo_result.delete, "1.0", tk.END)
-                self.ui_call(self.photo_result.insert, tk.END, f"📸 Analysis:\n\n{data.get('content','').strip()}")
+            prompt = (
+                f"User: [Image: {Path(self.photo_path).name}, "
+                f"{Path(self.photo_path).stat().st_size/1024:.1f}KB. "
+                f"Describe what this image likely contains based on filename and context.]\nAssistant:"
+            )
+            content = mb_inference.complete(prompt, n_predict=1024)
+            self.ui_call(self.photo_result.delete, "1.0", tk.END)
+            self.ui_call(self.photo_result.insert, tk.END, f"📸 Analysis:\n\n{content}")
         except Exception as e:
             self.ui_call(self.photo_result.insert, tk.END, f"Error: {e}")
     
@@ -549,6 +598,11 @@ AVAILABLE: ls, cd, pwd, cat, mkdir, rm, cp, mv, python, pip
             "simulation":{"environments":[]},"datasets":{"collections":[]},
             "logs":{"path":"logs/","rotation":"daily","retention_days":30}}
         json.dump(manifest, open(proj_dir/"manifest.json",'w'), indent=2)
+        try:
+            mb_vault.upsert_project_from_manifest(manifest, project_path=proj_dir)
+            mb_vault.index_project(pid)
+        except Exception as e:
+            self.set_bottom(f"Project created on disk; SQLite upsert warning: {e}")
         self.refresh_project_list(); self.project_combo.set(f"{name} ({pid})")
         self.current_project = pid; self.current_project_name = f"{name} ({pid})"
         self.show_project_editor()

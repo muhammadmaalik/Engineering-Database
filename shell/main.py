@@ -5,16 +5,27 @@ Query the vault, export training data, curate messages, manage models.
 """
 
 import sqlite3
-import os
-import json
 import sys
+import json
 from pathlib import Path
 from datetime import datetime
 from huggingface_hub import hf_hub_download, list_repo_files
 
-VAULT_DB = Path.home() / ".motherbrain" / "vault" / "vault_index.db"
-VAULT_ROOT = Path.home() / ".motherbrain" / "vault"
-MODELS_DIR = VAULT_ROOT / "shared" / "base_models"
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from core import paths  # noqa: E402
+from core.flywheel import (  # noqa: E402
+    export_jsonl,
+    export_pairs_jsonl,
+    mark_last_pair_good,
+)
+from core.models import PRESETS  # noqa: E402
+
+VAULT_DB = paths.VAULT_DB
+VAULT_ROOT = paths.VAULT_ROOT
+MODELS_DIR = paths.MODELS_DIR
 
 
 def get_db():
@@ -70,50 +81,25 @@ def show_dashboard():
     print("\n" + "-" * 50)
 
 
-def export_training_data(output_path=None, label_filter=None):
-    """Export curated messages as JSONL for fine-tuning."""
-    db = get_db()
-
-    if not output_path:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = f"dataset_{ts}.jsonl"
-
+def export_training_data(output_path=None, label_filter=None, project_id=None):
+    """Export curated messages as JSONL (includes project_id metadata)."""
     try:
-        query = """
-            SELECT m.timestamp, m.type_name, m.payload, c.label, c.correction
-            FROM message_log m
-            JOIN curation c ON m.id = c.message_log_id
-            WHERE 1=1
-        """
-        params = []
-
-        if label_filter:
-            query += " AND c.label = ?"
-            params.append(label_filter)
-
-        query += " ORDER BY m.timestamp"
-
-        rows = db.execute(query, params).fetchall()
-    except sqlite3.OperationalError:
-        print("[SHELL] No curated data. Run 'curate' first.")
-        db.close()
+        out = export_jsonl(
+            output_path,
+            label_filter=label_filter,
+            project_id=project_id,
+        )
+    except Exception as e:
+        print(f"[SHELL] Export failed: {e}")
         return None
 
-    with open(output_path, 'w') as f:
-        for ts, mtype, payload, label, correction in rows:
-            record = {
-                "timestamp": ts,
-                "type": mtype,
-                "payload": payload,
-                "label": label
-            }
-            if correction:
-                record["correction"] = correction
-            f.write(json.dumps(record) + '\n')
-
-    print(f"[SHELL] Exported {len(rows)} curated messages to {output_path}")
-    db.close()
-    return output_path
+    # Count lines for feedback
+    n = sum(1 for _ in Path(out).open(encoding="utf-8"))
+    if n == 0:
+        print("[SHELL] No curated data. Run 'curate' or 'mark' first.")
+        return None
+    print(f"[SHELL] Exported {n} curated messages to {out}")
+    return str(out)
 
 
 def curate_messages():
@@ -240,37 +226,29 @@ def build_conversation_pairs():
     db.close()
 
 
-def export_pairs(output_path=None):
-    """Export conversation pairs as complete training JSONL."""
-    db = get_db()
-
-    if not output_path:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = f"pairs_{ts}.jsonl"
-
+def export_pairs(output_path=None, project_id=None):
+    """Export conversation pairs as training JSONL with project_id metadata."""
     try:
-        rows = db.execute("""
-            SELECT query_text, response_text, curated_label, curated_correction
-            FROM conversation_pairs
-            ORDER BY id
-        """).fetchall()
-    except sqlite3.OperationalError:
-        print("[SHELL] No conversation pairs. Run 'pairs' first.")
-        db.close()
+        out = export_pairs_jsonl(output_path, project_id=project_id)
+    except Exception as e:
+        print(f"[SHELL] Export failed: {e}")
         return None
 
-    with open(output_path, 'w') as f:
-        for query, response, label, correction in rows:
-            record = {
-                "instruction": query,
-                "output": correction if correction else response,
-                "label": label or "none"
-            }
-            f.write(json.dumps(record) + '\n')
+    n = sum(1 for _ in Path(out).open(encoding="utf-8"))
+    if n == 0:
+        print("[SHELL] No conversation pairs found.")
+        return None
+    print(f"[SHELL] Exported {n} pairs to {out}")
+    return str(out)
 
-    print(f"[SHELL] Exported {len(rows)} pairs to {output_path}")
-    db.close()
-    return output_path
+
+def mark_good_for_training():
+    """Mark the latest QUERY+RESPONSE pair as good for training."""
+    ids = mark_last_pair_good()
+    if not ids:
+        print("[SHELL] No messages to mark.")
+        return
+    print(f"[SHELL] Marked message(s) {ids} as good for training.")
 
 
 # ─── MODEL REGISTRY ───────────────────────────────────────────
@@ -294,10 +272,24 @@ def init_model_registry():
     db.close()
 
 
+def resolve_download_target(repo_or_preset, quantization=None):
+    """Resolve preset shortcut (e.g. qwen-32b) or raw HF repo + quant."""
+    key = (repo_or_preset or "").strip().lower()
+    if key in PRESETS:
+        preset = PRESETS[key]
+        return preset["repo"], quantization or preset["quant"]
+    return repo_or_preset, quantization
+
+
 def model_download(repo_id, quantization=None):
-    """Download a GGUF model from Hugging Face."""
+    """Download a GGUF model from Hugging Face (supports PRESETS shortcuts)."""
     init_model_registry()
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+    repo_id, quantization = resolve_download_target(repo_id, quantization)
+    if not repo_id:
+        print("[SHELL] Usage: model download <repo|qwen-32b|gemma-9b> [quant]")
+        return
 
     print(f"[SHELL] Finding GGUF files in {repo_id}...")
 
@@ -379,7 +371,8 @@ def model_list():
     """).fetchall()
 
     if not models:
-        print("[SHELL] No models registered. Use 'model download <repo>' to get one.")
+        print("[SHELL] No models registered. Use 'model download <repo|qwen-32b>' to get one.")
+        print(f"[SHELL] Presets: {', '.join(PRESETS)}")
         db.close()
         return
 
@@ -391,6 +384,7 @@ def model_list():
         size_mb = size / (1024 * 1024) if size else 0
         print(f"  {mid:<40} {quant or '?':<10} {size_mb:>6.1f} MB  {role}")
 
+    print(f"\n  Download presets: {', '.join(PRESETS)}")
     db.close()
 
 
@@ -468,10 +462,11 @@ def interactive_mode():
             print("Commands:")
             print("  dashboard   - Show system overview")
             print("  curate      - Review and label messages for training")
+            print("  mark        - Mark last QUERY+RESPONSE pair as good for training")
             print("  pairs       - Build query+response conversation pairs")
-            print("  export      - Export curated data as JSONL")
-            print("  exportpairs - Export conversation pairs as training JSONL")
-            print("  model download <huggingface/repo> [quant] - Download a GGUF model")
+            print("  export [label] [path] - Export curated data as JSONL (with project_id)")
+            print("  exportpairs [path] - Export conversation pairs as training JSONL")
+            print("  model download <repo|qwen-32b|gemma-9b> [quant] - Download a GGUF model")
             print("  model list  - List registered models")
             print("  model info <id> - Show model details")
             print("  search <query> - Full-text search projects")
@@ -482,6 +477,8 @@ def interactive_mode():
             show_dashboard()
         elif action == "curate":
             curate_messages()
+        elif action == "mark":
+            mark_good_for_training()
         elif action == "pairs":
             build_conversation_pairs()
         elif action == "export":
@@ -500,7 +497,9 @@ def interactive_mode():
                     if repo:
                         model_download(repo, quant)
                     else:
-                        print("Usage: model download <huggingface/repo> [quantization]")
+                        print("Usage: model download <huggingface/repo|qwen-32b|gemma-9b> [quantization]")
+                        for k, v in PRESETS.items():
+                            print(f"  preset {k}: {v['repo']} {v['quant']}")
                 elif sub == "list":
                     model_list()
                 elif sub == "info":
@@ -527,11 +526,11 @@ def interactive_mode():
             total = db.execute("SELECT COUNT(*) FROM message_log").fetchone()[0]
             try:
                 curated = db.execute("SELECT COUNT(*) FROM curation").fetchone()[0]
-            except:
+            except Exception:
                 curated = 0
             try:
                 pairs = db.execute("SELECT COUNT(*) FROM conversation_pairs").fetchone()[0]
-            except:
+            except Exception:
                 pairs = 0
             print(f"  Total messages: {total}")
             print(f"  Curated: {curated}")
@@ -549,6 +548,8 @@ if __name__ == "__main__":
             show_dashboard()
         elif cmd == "curate":
             curate_messages()
+        elif cmd == "mark":
+            mark_good_for_training()
         elif cmd == "pairs":
             build_conversation_pairs()
         elif cmd == "export":
@@ -567,6 +568,9 @@ if __name__ == "__main__":
                 quant = sys.argv[4] if len(sys.argv) > 4 else None
                 if repo:
                     model_download(repo, quant)
+                else:
+                    print("Usage: model download <repo|qwen-32b|gemma-9b> [quant]")
+                    print(f"Presets: {', '.join(PRESETS)}")
         elif cmd == "search":
             if len(sys.argv) > 2:
                 search_projects(" ".join(sys.argv[2:]))
@@ -574,4 +578,3 @@ if __name__ == "__main__":
             print(f"Unknown command: {cmd}")
     else:
         interactive_mode()
-ENDOFPYTHON
