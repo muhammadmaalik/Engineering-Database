@@ -64,9 +64,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "mode": "local",
         "url": "http://127.0.0.1:8081",
         "model": "qwen2.5-coder-32b-instruct-q3_k_m.gguf",
-        # ~8GB laptop GPUs: offload as many layers as fit; rest stay on CPU/RAM.
+        # ~8GB laptop GPUs: partial CUDA offload; keep ctx/slots small for KV.
         "ngl": 28,
-        "ctx": 4096,
+        "ctx": 2048,
+        "parallel": 1,
+        "timeout": 300,
     },
     "sync": {
         "server_url": "http://10.0.0.1:8090",
@@ -78,6 +80,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "token": "",
         "tls_cert": "",
         "tls_key": "",
+        # Desktop + phone chat: tools off until inference is stable.
         "allow_tools": False,
     },
     "role": "laptop",

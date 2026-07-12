@@ -13,6 +13,10 @@ from . import paths
 
 _server_process: subprocess.Popen | None = None
 
+# Chat-friendly defaults for ~8GB VRAM (partial offload on 32B).
+DEFAULT_N_PREDICT = 512
+DEFAULT_TIMEOUT = 300.0
+
 
 def get_completion_url(cfg: dict[str, Any] | None = None) -> str:
     return paths.completion_url(cfg)
@@ -26,7 +30,7 @@ def is_ready(cfg: dict[str, Any] | None = None, timeout: float = 3.0) -> bool:
     """True when llama-server answers GET /health (not a slow /completion probe).
 
     Using /completion previously timed out on large models (e.g. Qwen 32B) even
-    when the server was already up, so the GUI stayed Offline / \"No Model\".
+    when the server was already up, so the GUI stayed offline / \"No Model\".
     """
     url = get_health_url(cfg)
     try:
@@ -48,14 +52,20 @@ def is_ready(cfg: dict[str, Any] | None = None, timeout: float = 3.0) -> bool:
 def complete(
     prompt: str,
     *,
-    n_predict: int = 2048,
+    n_predict: int = DEFAULT_N_PREDICT,
     temperature: float = 0.7,
     cfg: dict[str, Any] | None = None,
-    timeout: float = 180.0,
+    timeout: float | None = None,
     extra: dict[str, Any] | None = None,
 ) -> str:
     """POST to llama.cpp /completion and return content text."""
     cfg = cfg or paths.load_config()
+    inf = cfg.get("inference") or {}
+    if timeout is None:
+        try:
+            timeout = float(inf.get("timeout", DEFAULT_TIMEOUT))
+        except (TypeError, ValueError):
+            timeout = DEFAULT_TIMEOUT
     url = get_completion_url(cfg)
     body: dict[str, Any] = {
         "prompt": prompt,
@@ -64,8 +74,19 @@ def complete(
     }
     if extra:
         body.update(extra)
-    resp = requests.post(url, json=body, timeout=timeout)
-    resp.raise_for_status()
+    try:
+        resp = requests.post(url, json=body, timeout=timeout)
+        resp.raise_for_status()
+    except requests.exceptions.ReadTimeout as e:
+        raise TimeoutError(
+            f"Model busy/slow: no token within {timeout:.0f}s. "
+            "Wait for other requests to finish, lower ctx/n_predict, "
+            "disable tools (web.allow_tools), or use a smaller GGUF."
+        ) from e
+    except requests.exceptions.ConnectionError as e:
+        raise ConnectionError(
+            f"Cannot reach llama-server at {url}. Is Start AI running?"
+        ) from e
     data = resp.json()
     content = data.get("content", "")
     if isinstance(content, str):
@@ -84,8 +105,13 @@ def start_server(
     cfg: dict[str, Any] | None = None,
     llama_bin: Path | str | None = None,
     wait_seconds: int = 90,
+    force: bool = False,
 ) -> bool:
-    """Start local llama-server from config (no-op if inference.mode == remote)."""
+    """Start local llama-server from config (no-op if inference.mode == remote).
+
+    When ``force`` is True, stop any locally tracked process and start fresh
+    even if /health already answers (used after config changes).
+    """
     global _server_process
     cfg = cfg or paths.load_config()
     inf = cfg.get("inference") or {}
@@ -93,7 +119,7 @@ def start_server(
         return is_ready(cfg)
 
     # Already serving (e.g. started outside this process).
-    if is_ready(cfg, timeout=2.0):
+    if not force and is_ready(cfg, timeout=2.0):
         return True
 
     model_path = Path(model) if model else paths.active_model_path(cfg)
@@ -119,24 +145,31 @@ def start_server(
         else:
             host = rest.split("/")[0]
 
-    ngl = str(inf.get("ngl", 99))
-    ctx = str(inf.get("ctx", 8192))
+    ngl = str(inf.get("ngl", 28))
+    ctx = str(inf.get("ctx", 2048))
+    # One slot: multi-slot auto on 8GB GPUs fragments KV and slows 32B badly.
+    parallel = str(inf.get("parallel", 1))
 
     stop_server()
+    cmd = [
+        str(bin_path),
+        "-m",
+        str(model_path),
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "-ngl",
+        ngl,
+        "-c",
+        ctx,
+        "-np",
+        parallel,
+        "-fa",
+        "on",
+    ]
     _server_process = subprocess.Popen(
-        [
-            str(bin_path),
-            "-m",
-            str(model_path),
-            "--host",
-            host,
-            "--port",
-            str(port),
-            "-ngl",
-            ngl,
-            "-c",
-            ctx,
-        ],
+        cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

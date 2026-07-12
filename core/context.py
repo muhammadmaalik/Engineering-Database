@@ -45,7 +45,7 @@ def _list_key_files(proj: Path) -> list[str]:
     return found
 
 
-def build_prompt(project_id: str | None = None, *, include_tools: bool = True) -> str:
+def build_prompt(project_id: str | None = None, *, include_tools: bool = False) -> str:
     """Build the companion system prompt for the active project.
 
     When a project is selected, injects name/description/status/tags, devices,
@@ -54,13 +54,15 @@ def build_prompt(project_id: str | None = None, *, include_tools: bool = True) -
     """
     lines = [
         "You are the user's engineering companion for Motherbrain.",
-        "Use tools to inspect the machine when needed.",
         "Prefer concrete, actionable answers about hardware, firmware, CAD, and datasets.",
+        "Answer directly from context. Do not invent CLI commands, firmware versions, "
+        "or tool calls unless tools are explicitly available below.",
     ]
 
     if include_tools:
         from .tools import TOOL_HINT
 
+        lines.append("Use tools to inspect the machine when needed.")
         lines.append("")
         lines.append(TOOL_HINT.strip())
 
@@ -77,6 +79,12 @@ def build_prompt(project_id: str | None = None, *, include_tools: bool = True) -
     tags = proj.get("tags") or []
     tags_str = ", ".join(tags) if isinstance(tags, list) else str(tags)
 
+    stand = (
+        "Standing instruction: you are the user's engineering companion for this project."
+    )
+    if include_tools:
+        stand += " Use tools to inspect the machine when needed."
+
     lines.extend(
         [
             "",
@@ -84,8 +92,7 @@ def build_prompt(project_id: str | None = None, *, include_tools: bool = True) -
             f"Status: {status}",
             f"Description: {desc or '(none)'}",
             f"Tags: {tags_str or '(none)'}",
-            f"Standing instruction: you are the user's engineering companion for this project; "
-            f"use tools to inspect the machine when needed.",
+            stand,
         ]
     )
 
@@ -155,7 +162,7 @@ def build_chat_prompt(
     history: list[dict[str, str]] | None = None,
     history_limit: int = 6,
     media_note: str = "",
-    include_tools: bool = True,
+    include_tools: bool = False,
 ) -> str:
     """Assemble system + recent turns + user message for /completion."""
     system = build_prompt(project_id, include_tools=include_tools)

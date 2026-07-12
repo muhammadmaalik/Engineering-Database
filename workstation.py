@@ -637,14 +637,26 @@ class Workstation:
             media_note = ""
             if self.photo_path:
                 media_note = f"[Attached image: {Path(self.photo_path).name}]"
+            cfg = mb_paths.load_config()
+            # Match web companion: tools off unless explicitly enabled.
+            allow_tools = bool((cfg.get("web") or {}).get("allow_tools", False))
             prompt = mb_context.build_chat_prompt(
                 text,
                 project_id=self.current_project,
                 history=self.chat_context,
+                history_limit=4,
                 media_note=media_note,
+                include_tools=allow_tools,
             )
-            ai = mb_tools.run_with_tools(prompt, mb_inference.complete)
-            ai = mb_tools.extract_final_text(ai) or (ai or "").strip()
+
+            def _complete(p: str) -> str:
+                return mb_inference.complete(p, n_predict=512, cfg=cfg)
+
+            if allow_tools:
+                ai = mb_tools.run_with_tools(prompt, _complete, max_rounds=1)
+                ai = mb_tools.extract_final_text(ai) or (ai or "").strip()
+            else:
+                ai = (_complete(prompt) or "").strip()
             self.last_ai_response = ai
             self.chat_context.append({"user": text, "ai": ai})
             self.ui_call(self.chat_add, "ai", ai or "(empty)")
@@ -1090,8 +1102,8 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
             "mode": tk.StringVar(value=str(inf.get("mode", "local"))),
             "url": tk.StringVar(value=str(inf.get("url", "http://127.0.0.1:8081"))),
             "model": tk.StringVar(value=str(inf.get("model", ""))),
-            "ngl": tk.StringVar(value=str(inf.get("ngl", 99))),
-            "ctx": tk.StringVar(value=str(inf.get("ctx", 8192))),
+            "ngl": tk.StringVar(value=str(inf.get("ngl", 28))),
+            "ctx": tk.StringVar(value=str(inf.get("ctx", 2048))),
             "sync_url": tk.StringVar(value=str(sync_cfg.get("server_url", ""))),
             "sync_token": tk.StringVar(value=str(sync_cfg.get("token", ""))),
             "role": tk.StringVar(value=str(cfg.get("role", "laptop"))),
@@ -1118,8 +1130,8 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
     def save_settings(self):
         cfg = mb_paths.load_config()
         try:
-            ngl = int(self.settings_vars["ngl"].get().strip() or "99")
-            ctx = int(self.settings_vars["ctx"].get().strip() or "8192")
+            ngl = int(self.settings_vars["ngl"].get().strip() or "28")
+            ctx = int(self.settings_vars["ctx"].get().strip() or "2048")
         except ValueError:
             messagebox.showerror("Settings", "ngl and ctx must be integers."); return
         cfg["inference"] = {
@@ -1129,6 +1141,8 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
             "model": self.settings_vars["model"].get().strip(),
             "ngl": ngl,
             "ctx": ctx,
+            "parallel": int((cfg.get("inference") or {}).get("parallel", 1) or 1),
+            "timeout": int((cfg.get("inference") or {}).get("timeout", 300) or 300),
         }
         cfg["sync"] = {
             **(cfg.get("sync") or {}),

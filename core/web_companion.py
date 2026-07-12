@@ -289,13 +289,17 @@ def _run_chat(message: str, project_id: str | None, history: list[dict[str, str]
         message,
         project_id=project_id,
         history=history,
-        history_limit=6,
+        history_limit=4,
         include_tools=allow_tools,
     )
+
+    def _complete(p: str) -> str:
+        return inference.complete(p, n_predict=512, cfg=cfg)
+
     if allow_tools:
-        raw = run_with_tools(prompt, inference.complete)
+        raw = run_with_tools(prompt, _complete, max_rounds=1)
         return extract_final_text(raw) or (raw or "").strip()
-    return (inference.complete(prompt) or "").strip()
+    return (_complete(prompt) or "").strip()
 
 
 class WebCompanionHandler(BaseHTTPRequestHandler):

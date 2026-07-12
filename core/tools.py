@@ -31,7 +31,9 @@ Available tools:
 - search_files|pattern|directory
 """.strip()
 
-MAX_TOOL_ROUNDS = 5
+# Keep tool loops short: each round is a full /completion (easy to hit read timeouts
+# on partially-offloaded 32B models). Prefer tools off for normal chat.
+MAX_TOOL_ROUNDS = 1
 
 CompleteFn = Callable[[str], str]
 
