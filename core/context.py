@@ -155,9 +155,10 @@ def build_chat_prompt(
     history: list[dict[str, str]] | None = None,
     history_limit: int = 6,
     media_note: str = "",
+    include_tools: bool = True,
 ) -> str:
     """Assemble system + recent turns + user message for /completion."""
-    system = build_prompt(project_id)
+    system = build_prompt(project_id, include_tools=include_tools)
     parts = [system, ""]
     for turn in (history or [])[-history_limit:]:
         parts.append(f"User: {turn.get('user', '')}")

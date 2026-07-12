@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#121212">
+<title>Motherbrain</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #121212;
+    --panel: #1c1c1c;
+    --chat: #222;
+    --fg: #e8e8e8;
+    --dim: #888;
+    --user: #4a9eff;
+    --ai: #50fa7b;
+    --warn: #ffaa00;
+    --err: #ff6b6b;
+    --border: #333;
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    padding: 10px 12px; background: #0d0d0d; border-bottom: 1px solid var(--border);
+  }
+  header h1 { margin: 0; font-size: 1rem; color: var(--ai); flex: 1 1 auto; }
+  .pill {
+    font-size: .75rem; padding: 4px 8px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--dim); white-space: nowrap;
+  }
+  .pill.ok { color: var(--ai); border-color: #2a5a2a; }
+  .pill.bad { color: var(--err); border-color: #5a2a2a; }
+  .controls {
+    display: flex; gap: 8px; align-items: center; width: 100%;
+  }
+  select, button {
+    font-size: 16px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--fg); padding: 8px 10px;
+  }
+  select { flex: 1; min-width: 0; }
+  button { cursor: pointer; }
+  button.primary { background: var(--user); border-color: transparent; color: #fff; font-weight: 600; }
+  #log {
+    flex: 1; overflow-y: auto; padding: 12px; -webkit-overflow-scrolling: touch;
+    background: var(--chat);
+  }
+  .msg { margin: 0 0 14px; max-width: 100%; }
+  .msg .who { font-size: .75rem; font-weight: 700; margin-bottom: 4px; }
+  .msg.you .who { color: var(--user); }
+  .msg.ai .who { color: var(--ai); }
+  .msg.sys .who { color: var(--dim); }
+  .msg .body { white-space: pre-wrap; word-break: break-word; line-height: 1.45; font-size: .95rem; }
+  footer {
+    padding: 10px 12px calc(10px + var(--safe-bottom));
+    border-top: 1px solid var(--border); background: #0d0d0d;
+    display: flex; gap: 8px; align-items: flex-end;
+  }
+  textarea {
+    flex: 1; min-height: 44px; max-height: 120px; resize: none;
+    font-size: 16px; padding: 10px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--fg);
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Motherbrain</h1>
+  <span class="pill" id="aiPill">AI —</span>
+  <span class="pill" id="syncPill">Sync —</span>
+  <div class="controls">
+    <select id="project" aria-label="Project">
+      <option value="">No project</option>
+    </select>
+    <button type="button" id="syncBtn">Sync</button>
+    <button type="button" id="clearBtn">Clear</button>
+  </div>
+</header>
+<main id="log" aria-live="polite"></main>
+<footer>
+  <textarea id="input" rows="2" placeholder="Message…" enterkeyhint="send"></textarea>
+  <button class="primary" type="button" id="sendBtn">Send</button>
+</footer>
+<script>
+const SESSION = 'phone';
+const logEl = document.getElementById('log');
+const inputEl = document.getElementById('input');
+const projectEl = document.getElementById('project');
+const aiPill = document.getElementById('aiPill');
+const syncPill = document.getElementById('syncPill');
+
+function addMsg(kind, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + kind;
+  const who = document.createElement('div');
+  who.className = 'who';
+  who.textContent = kind === 'you' ? 'You' : kind === 'ai' ? 'Companion' : 'System';
+  const body = document.createElement('div');
+  body.className = 'body';
+  body.textContent = text;
+  div.appendChild(who); div.appendChild(body);
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function api(path, opts={}) {
+  const r = await fetch(path, {
+    credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json', ...(opts.headers||{})},
+    ...opts,
+  });
+  if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+  return data;
+}
+
+async function refreshStatus() {
+  try {
+    const s = await api('/api/status');
+    aiPill.textContent = s.ai.ready ? ('AI ' + (s.ai.mode||'')) : 'AI offline';
+    aiPill.className = 'pill ' + (s.ai.ready ? 'ok' : 'bad');
+    syncPill.textContent = s.sync.ok ? 'Sync ok' : 'Sync down';
+    syncPill.className = 'pill ' + (s.sync.ok ? 'ok' : 'bad');
+  } catch (e) {
+    aiPill.textContent = 'AI ?'; aiPill.className = 'pill bad';
+  }
+}
+
+async function loadProjects() {
+  try {
+    const data = await api('/api/projects');
+    const cur = projectEl.value;
+    projectEl.innerHTML = '<option value="">No project</option>';
+    for (const p of (data.projects || [])) {
+      const opt = document.createElement('option');
+      opt.value = p.id; opt.textContent = p.name + ' (' + p.id + ')';
+      projectEl.appendChild(opt);
+    }
+    if (cur) projectEl.value = cur;
+  } catch (e) { addMsg('sys', 'Projects: ' + e.message); }
+}
+
+async function send() {
+  const message = inputEl.value.trim();
+  if (!message) return;
+  inputEl.value = '';
+  addMsg('you', message);
+  document.getElementById('sendBtn').disabled = true;
+  try {
+    const data = await api('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        session_id: SESSION,
+        project_id: projectEl.value || null,
+      }),
+    });
+    addMsg('ai', data.reply || '(empty)');
+  } catch (e) {
+    addMsg('sys', 'Error: ' + e.message);
+  } finally {
+    document.getElementById('sendBtn').disabled = false;
+    inputEl.focus();
+  }
+}
+
+projectEl.addEventListener('change', async () => {
+  try {
+    await api('/api/project', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: SESSION, project_id: projectEl.value || null }),
+    });
+  } catch (e) { addMsg('sys', e.message); }
+});
+
+document.getElementById('sendBtn').addEventListener('click', send);
+inputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+document.getElementById('syncBtn').addEventListener('click', async () => {
+  addMsg('sys', 'Syncing…');
+  try {
+    const data = await api('/api/sync', { method: 'POST', body: '{}' });
+    const pull = (data.result && data.result.pull && data.result.pull.count) || 0;
+    const push = (data.result && data.result.push && (data.result.push.count || (data.result.push.pushed||[]).length)) || 0;
+    addMsg('sys', 'Sync done: pull ' + pull + ', push ' + push);
+    await refreshStatus();
+    await loadProjects();
+  } catch (e) { addMsg('sys', 'Sync error: ' + e.message); }
+});
+document.getElementById('clearBtn').addEventListener('click', async () => {
+  try {
+    await api('/api/clear', { method: 'POST', body: JSON.stringify({ session_id: SESSION }) });
+    logEl.innerHTML = '';
+    addMsg('sys', 'Chat cleared.');
+  } catch (e) { addMsg('sys', e.message); }
+});
+
+(async function init() {
+  addMsg('sys', 'Phone companion — tools disabled unless web.allow_tools is true.');
+  await refreshStatus();
+  await loadProjects();
+  setInterval(refreshStatus, 15000);
+})();
+</script>
+</body>
+</html>

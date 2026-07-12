@@ -1,8 +1,15 @@
-"""Vault paths and ~/.motherbrain/config.json helpers."""
+"""Vault paths and ~/.motherbrain/config.json helpers.
+
+Vault and config always live under ``~/.motherbrain`` (``Path.home()``),
+including when the app is frozen by PyInstaller (``sys.frozen`` /
+``sys._MEIPASS``). Bundled assets may live under ``_MEIPASS``; user data
+never does.
+"""
 
 from __future__ import annotations
 
 import json
+import sys
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -11,6 +18,7 @@ HOME = Path.home()
 MOTHERBRAIN_DIR = HOME / ".motherbrain"
 CONFIG_PATH = MOTHERBRAIN_DIR / "config.json"
 VAULT_ROOT = MOTHERBRAIN_DIR / "vault"
+CERTS_DIR = MOTHERBRAIN_DIR / "certs"
 
 PROJECTS_DIR = VAULT_ROOT / "projects"
 CHATS_DIR = VAULT_ROOT / "chats"
@@ -35,6 +43,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "server_url": "http://10.0.0.1:8090",
         "token": "",
     },
+    "web": {
+        "host": "10.0.0.1",
+        "port": 8443,
+        "token": "",
+        "tls_cert": "",
+        "tls_key": "",
+        "allow_tools": False,
+    },
     "role": "laptop",
 }
 
@@ -58,9 +74,25 @@ SYNC_ROOTS = (
 )
 
 
+def is_frozen() -> bool:
+    """True when running from a PyInstaller (or similar) bundle."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def bundle_dir() -> Path:
+    """Directory for bundled read-only assets (templates, etc.).
+
+    When frozen, this is ``sys._MEIPASS``. Otherwise the repo root.
+    """
+    if is_frozen() and hasattr(sys, "_MEIPASS"):
+        return Path(getattr(sys, "_MEIPASS"))
+    return Path(__file__).resolve().parent.parent
+
+
 def ensure_dirs() -> None:
-    """Create motherbrain home + vault subdirectory tree."""
+    """Create motherbrain home + vault subdirectory tree + certs dir."""
     MOTHERBRAIN_DIR.mkdir(parents=True, exist_ok=True)
+    CERTS_DIR.mkdir(parents=True, exist_ok=True)
     for d in VAULT_SUBDIRS:
         d.mkdir(parents=True, exist_ok=True)
 

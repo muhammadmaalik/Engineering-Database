@@ -6,10 +6,11 @@ Local-first AI companion platform for custom hardware projects. Hybrid topology:
 
 - **kernel/** — C++20 daemon. Shared memory IPC, hardware abstraction, inference scheduler.
 - **shell/** — Python CLI. Model management, dataset curation, training export.
-- **core/** — Shared companion core (context, tools, inference, models, sync, flywheel).
+- **core/** — Shared companion core (context, tools, inference, models, sync, flywheel, web companion).
 - **workstation.py** — Home GUI (project-aware companion chat, models, sync).
 - **sync_client.py** — Laptop client (vault sync + companion chat).
 - **sync_server.py** — Home vault sync HTTP server (`:8090`).
+- **web_companion.py** — Hardened HTTPS phone UI (WireGuard bind + token auth).
 
 ## Config
 
@@ -28,11 +29,21 @@ All runtime config lives at `~/.motherbrain/config.json` (created on first run /
     "server_url": "http://10.0.0.1:8090",
     "token": ""
   },
+  "web": {
+    "host": "10.0.0.1",
+    "port": 8443,
+    "token": "",
+    "tls_cert": "",
+    "tls_key": "",
+    "allow_tools": false
+  },
   "role": "laptop"
 }
 ```
 
-Vault root: `~/.motherbrain/vault/` (projects, chats, models, datasets, exports).
+Vault root: `~/.motherbrain/vault/` (projects, chats, models, datasets, exports).  
+TLS certs for the web companion: `~/.motherbrain/certs/`.  
+`web.token` is generated automatically on first web-companion start if empty.
 
 ## Hybrid runbook
 
@@ -73,6 +84,41 @@ Set `inference.mode` to `"remote"` and `inference.url` to the home llama URL whe
 
 Use WireGuard (or equivalent) so the laptop can reach home `:8090` (sync) and optionally `:8081` (remote inference). Put the home VPN IP in `sync.server_url` / remote `inference.url`.
 
+## Windows .exe
+
+Build a double-clickable GUI (no terminal) from the repo root on Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_exe.ps1
+# optional laptop client too:
+powershell -ExecutionPolicy Bypass -File scripts/build_exe.ps1 -IncludeSyncClient
+```
+
+Output: `dist/Motherbrain.exe` (from `workstation.py` via `motherbrain.spec`).  
+Runtime data still uses `%USERPROFILE%\.motherbrain` when frozen — never the PyInstaller `_MEIPASS` unpack dir. Do not commit `dist/` or `build/`.
+
+Requires: Python 3 + `pip install pyinstaller` (the script installs PyInstaller if needed).
+
+## iPhone web companion
+
+Run on the home PC (reachable only on your WireGuard address by default):
+
+```bash
+python3 web_companion.py
+# local HTTP smoke-test only:
+python3 web_companion.py --dev --port 8443
+```
+
+Open `https://10.0.0.1:8443` on the phone (over WireGuard). Trust the self-signed cert once. Log in with `web.token` from `~/.motherbrain/config.json`.
+
+### Security model
+
+- **VPN-only bind** — default `web.host` is `10.0.0.1` (not `0.0.0.0`). Public all-interfaces bind is refused.
+- **Token auth** — every page/API needs `Authorization: Bearer …` or the `mb_token` cookie (set via `/login`).
+- **HTTPS** — self-signed cert/key under `~/.motherbrain/certs/`; plain HTTP only with `--dev` on `127.0.0.1`.
+- **No filesystem tools by default** — `web.allow_tools: false` so the phone UI cannot trigger read/write/shell tools unless you opt in.
+- Rate limiting + CSP / nosniff / frame-deny headers.
+
 ## Shell quick reference
 
 ```bash
@@ -90,7 +136,3 @@ python3 shell/main.py exportpairs
 - Any microcontroller speaking the Motherbrain binary protocol
 
 Firmware / MQTT hooks exist as stubs in `core/devices.py`; no robot firmware in this pass.
-
-## Future packaging
-
-Windows `.exe` (PyInstaller) and an iPhone web UI are planned packaging work — **not implemented in this pass**.
