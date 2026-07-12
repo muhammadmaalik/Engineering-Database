@@ -82,9 +82,13 @@ def start_server(
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
 
-    bin_path = Path(llama_bin) if llama_bin else paths.LLAMA_SERVER_DEFAULT
+    bin_path = Path(llama_bin) if llama_bin else paths.resolve_llama_server()
     if not bin_path.exists():
-        raise FileNotFoundError(f"llama-server not found: {bin_path}")
+        raise FileNotFoundError(
+            f"llama-server not found: {bin_path}. "
+            "Install CUDA builds to ~/llama.cpp/build/bin/ "
+            "(e.g. ggml-org/llama.cpp win-cuda release)."
+        )
 
     # Parse host/port from configured URL (default 127.0.0.1:8081).
     base = paths.inference_base_url(cfg)

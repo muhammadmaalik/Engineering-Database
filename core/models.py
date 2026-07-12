@@ -20,8 +20,15 @@ PRESETS: dict[str, dict[str, str]] = {
     "qwen-32b": {
         "label": "Qwen2.5-Coder 32B Instruct",
         "repo": "Qwen/Qwen2.5-Coder-32B-Instruct-GGUF",
-        "quant": "Q4_K_M",
-        "filename": "Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf",
+        # Q3_K_M (~15GB): best 32B fit for ~8GB VRAM with CUDA partial offload (-ngl).
+        "quant": "Q3_K_M",
+        "filename": "qwen2.5-coder-32b-instruct-q3_k_m.gguf",
+    },
+    "qwen-14b": {
+        "label": "Qwen2.5-Coder 14B Instruct",
+        "repo": "Qwen/Qwen2.5-Coder-14B-Instruct-GGUF",
+        "quant": "Q5_K_M",
+        "filename": "qwen2.5-coder-14b-instruct-q5_k_m.gguf",
     },
 }
 

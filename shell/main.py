@@ -466,7 +466,7 @@ def interactive_mode():
             print("  pairs       - Build query+response conversation pairs")
             print("  export [label] [path] - Export curated data as JSONL (with project_id)")
             print("  exportpairs [path] - Export conversation pairs as training JSONL")
-            print("  model download <repo|qwen-32b|gemma-9b> [quant] - Download a GGUF model")
+            print("  model download <repo|qwen-32b|qwen-14b|gemma-9b> [quant] - Download a GGUF model")
             print("  model list  - List registered models")
             print("  model info <id> - Show model details")
             print("  search <query> - Full-text search projects")

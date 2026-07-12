@@ -29,15 +29,44 @@ EXPORTS_DIR = VAULT_ROOT / "shared" / "exports"
 SCREENSHOTS_DIR = VAULT_ROOT / "shared" / "screenshots"
 VAULT_DB = VAULT_ROOT / "vault_index.db"
 
-LLAMA_SERVER_DEFAULT = HOME / "llama.cpp" / "build" / "bin" / "llama-server"
+# Windows builds ship llama-server.exe; POSIX builds use llama-server.
+_LLAMA_BIN_DIR = HOME / "llama.cpp" / "build" / "bin"
+LLAMA_SERVER_DEFAULT = (
+    _LLAMA_BIN_DIR / "llama-server.exe"
+    if (_LLAMA_BIN_DIR / "llama-server.exe").exists()
+    else _LLAMA_BIN_DIR / "llama-server"
+)
+
+
+def resolve_llama_server() -> Path:
+    """Locate llama-server binary (config override, then common install paths)."""
+    cfg = load_config() if CONFIG_PATH.exists() else {}
+    override = (cfg.get("inference") or {}).get("llama_bin") or ""
+    if override:
+        p = Path(override)
+        if p.exists():
+            return p
+    candidates = [
+        _LLAMA_BIN_DIR / "llama-server.exe",
+        _LLAMA_BIN_DIR / "llama-server",
+        _LLAMA_BIN_DIR / "Release" / "llama-server.exe",
+        HOME / "llama.cpp" / "llama-server.exe",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    # Fall back to default path even if missing (caller raises FileNotFoundError).
+    return LLAMA_SERVER_DEFAULT
+
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "inference": {
         "mode": "local",
         "url": "http://127.0.0.1:8081",
-        "model": "Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf",
-        "ngl": 99,
-        "ctx": 8192,
+        "model": "qwen2.5-coder-32b-instruct-q3_k_m.gguf",
+        # ~8GB laptop GPUs: offload as many layers as fit; rest stay on CPU/RAM.
+        "ngl": 28,
+        "ctx": 4096,
     },
     "sync": {
         "server_url": "http://10.0.0.1:8090",

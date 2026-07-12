@@ -46,6 +46,8 @@ ADAPTERS_DIR = mb_paths.ADAPTERS_DIR
 DATASETS_DIR = mb_paths.DATASETS_DIR
 EXPORTS_DIR = mb_paths.EXPORTS_DIR
 SCREENSHOTS_DIR = mb_paths.SCREENSHOTS_DIR
+CHATS_DIR = mb_paths.CHATS_DIR
+CHATS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ─── Colors ──────────────────────────────────────────────────
 BG, PANEL_BG, CHAT_BG, SIDEBAR_BG = "#1a1a1a", "#222222", "#282828", "#1e1e1e"
@@ -70,9 +72,14 @@ class Workstation:
         self.current_cmd_start = "1.0"
         self.photo_path = None
         self.chat_context = []
+        self.current_chat_name = None
+        self.current_chat_file = None
         self.ui_queue = Queue()
         self._after_id = None
         self.sync_status_text = "● Sync —"
+        self.wsl_proc = None
+        self._wsl_available = None
+        self._term_line_buf = ""
         
         # Start UI poller
         self._poll_ui_queue()
@@ -127,6 +134,18 @@ class Workstation:
             btn.bind("<Leave>", lambda e, b=btn: b.config(bg=SIDEBAR_BG))
         
         tk.Frame(sidebar, height=1, bg=BORDER).pack(fill=tk.X, padx=8, pady=8)
+        tk.Label(sidebar, text="◆ CHAT HISTORY", fg=DIM, bg=SIDEBAR_BG, font=("Consolas", 8, "bold")).pack(pady=3, padx=8, anchor="w")
+        self.chat_listbox = tk.Listbox(
+            sidebar, bg=INPUT_BG, fg=TEXT_COLOR, font=("Consolas", 8),
+            relief=tk.FLAT, selectbackground=USER_COLOR, height=6,
+        )
+        self.chat_listbox.pack(fill=tk.X, padx=8, pady=3)
+        self.chat_listbox.bind("<<ListboxSelect>>", self.load_chat)
+        self.refresh_chat_list()
+        tk.Button(sidebar, text="+ New Chat", command=self.new_chat, bg="#2a5a2a", fg=TEXT_COLOR,
+                 font=("Consolas", 8), relief=tk.FLAT, cursor="hand2").pack(fill=tk.X, padx=8, pady=2)
+
+        tk.Frame(sidebar, height=1, bg=BORDER).pack(fill=tk.X, padx=8, pady=5)
         tk.Label(sidebar, text="◆ PROJECT", fg=DIM, bg=SIDEBAR_BG, font=("Consolas", 8, "bold")).pack(pady=3, padx=8, anchor="w")
         
         self.project_combo = ttk.Combobox(sidebar, state="readonly", font=("Consolas", 9))
@@ -142,11 +161,11 @@ class Workstation:
         self.work_frame = tk.Frame(self.main_paned, bg=BG)
         self.main_paned.add(self.work_frame)
         
-        # ─── RIGHT TERMINAL ───────────────────────────────────
+        # ─── RIGHT TERMINAL (WSL) ──────────────────────────────
         right_frame = tk.Frame(self.main_paned, bg=PANEL_BG, width=420)
         self.main_paned.add(right_frame)
         
-        tk.Label(right_frame, text="◆ TERMINAL", fg=AI_COLOR, bg=PANEL_BG, font=("Consolas", 9, "bold")).pack(pady=5)
+        tk.Label(right_frame, text="◆ WSL TERMINAL", fg=AI_COLOR, bg=PANEL_BG, font=("Consolas", 9, "bold")).pack(pady=5)
         
         term_frame = tk.Frame(right_frame, bg="#000000", highlightthickness=1, highlightbackground=BORDER)
         term_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -156,15 +175,16 @@ class Workstation:
         self.terminal_text.pack(fill=tk.BOTH, expand=True)
         self.terminal_text.bind("<Return>", self.terminal_execute)
         self.terminal_text.bind("<Key>", self.terminal_key)
+        self.terminal_text.bind("<BackSpace>", self.terminal_backspace)
+        self.terminal_text.bind("<Control-c>", self.terminal_interrupt)
+        self.terminal_text.bind("<Control-l>", lambda e: self.terminal_clear() or "break")
         
         self.terminal_text.tag_config("prompt", foreground="#00ff41")
         self.terminal_text.tag_config("output", foreground="#00cc33")
         self.terminal_text.tag_config("error", foreground="#ff4444")
         self.terminal_text.tag_config("info", foreground="#ffaa00")
         
-        self.terminal_text.insert(tk.END, "Motherbrain Terminal v2.1\n", "info")
-        self.terminal_text.insert(tk.END, "Type 'help' for commands.\n\n", "output")
-        self.terminal_prompt()
+        self._start_wsl_terminal()
         
         # ─── BOTTOM BAR ───────────────────────────────────────
         self.bottom_bar = tk.Label(root, text="Ready.", fg=DIM, bg=HEADER_BG, font=("Consolas", 8), anchor="w")
@@ -218,15 +238,112 @@ class Workstation:
         self.set_bottom(f"Project: {val}")
     
     # ═══════════════════════════════════════════════════════════
-    # TERMINAL (non-blocking commands)
+    # WSL TERMINAL (interactive bash via wsl.exe)
     # ═══════════════════════════════════════════════════════════
-    
+
+    def _wsl_installed(self) -> bool:
+        if self._wsl_available is not None:
+            return self._wsl_available
+        try:
+            r = subprocess.run(
+                ["wsl.exe", "-l", "-v"],
+                capture_output=True, timeout=10,
+            )
+            # wsl -l output is UTF-16LE on Windows; treat any success as installed.
+            out = (r.stdout or b"") + (r.stderr or b"")
+            text = out.decode("utf-16-le", errors="ignore") or out.decode("utf-8", errors="ignore")
+            self._wsl_available = r.returncode == 0 and ("Ubuntu" in text or "VERSION" in text.upper() or "NAME" in text.upper())
+        except Exception:
+            self._wsl_available = False
+        return self._wsl_available
+
+    def _start_wsl_terminal(self):
+        self.terminal_text.delete("1.0", tk.END)
+        if not self._wsl_installed():
+            self.terminal_text.insert(
+                tk.END,
+                "WSL is not installed or no distro is registered.\n"
+                "Install with: wsl --install\n"
+                "Then restart Workstation for a real Linux shell.\n"
+                "Fallback: local PowerShell one-shots still work via 'win:' prefix.\n\n",
+                "error",
+            )
+            self.terminal_prompt()
+            return
+        try:
+            creationflags = 0
+            if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                creationflags = subprocess.CREATE_NO_WINDOW
+            self.wsl_proc = subprocess.Popen(
+                ["wsl.exe", "-e", "bash", "-l"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=0,
+                creationflags=creationflags,
+            )
+            self.terminal_text.insert(tk.END, "WSL bash started (Ubuntu).\n", "info")
+            self.terminal_text.insert(tk.END, "Interactive Linux shell — apt, pip, etc. work here.\n\n", "output")
+            self.current_cmd_start = self.terminal_text.index("end-1c")
+            threading.Thread(target=self._wsl_reader, daemon=True).start()
+        except Exception as e:
+            self.wsl_proc = None
+            self.terminal_text.insert(tk.END, f"Failed to start WSL: {e}\n", "error")
+            self.terminal_prompt()
+
+    def _wsl_reader(self):
+        proc = self.wsl_proc
+        if not proc or not proc.stdout:
+            return
+        try:
+            while proc.poll() is None:
+                chunk = proc.stdout.read(1)
+                if not chunk:
+                    break
+                try:
+                    text = chunk.decode("utf-8", errors="replace")
+                except Exception:
+                    text = str(chunk)
+                self.ui_call(self._term_append_output, text)
+            # Drain remaining
+            rest = proc.stdout.read() if proc.stdout else b""
+            if rest:
+                self.ui_call(self._term_append_output, rest.decode("utf-8", errors="replace"))
+            self.ui_call(self._term_append_output, "\n[WSL shell exited]\n")
+        except Exception as e:
+            self.ui_call(self._term_append_output, f"\n[WSL read error: {e}]\n")
+
+    def _term_append_output(self, text: str):
+        self.terminal_text.insert(tk.END, text, "output")
+        self.terminal_text.see(tk.END)
+        self.current_cmd_start = self.terminal_text.index("end-1c")
+
     def terminal_prompt(self):
+        """Fallback prompt when WSL is unavailable."""
         cwd = os.getcwd().replace(str(Path.home()), "~")
         self.terminal_text.insert(tk.END, f"\n{cwd}$ ", "prompt")
         self.terminal_text.see(tk.END)
         self.current_cmd_start = self.terminal_text.index("end-1c")
-    
+
+    def terminal_clear(self):
+        self.terminal_text.delete("1.0", tk.END)
+        self.current_cmd_start = "1.0"
+        return "break"
+
+    def terminal_backspace(self, event):
+        if self.terminal_text.compare("insert", "<=", self.current_cmd_start):
+            return "break"
+        return None
+
+    def terminal_interrupt(self, event):
+        if self.wsl_proc and self.wsl_proc.stdin and self.wsl_proc.poll() is None:
+            try:
+                self.wsl_proc.stdin.write(b"\x03")
+                self.wsl_proc.stdin.flush()
+            except Exception:
+                pass
+        return "break"
+
     def terminal_key(self, event):
         if self.terminal_text.compare("insert", "<", self.current_cmd_start):
             self.terminal_text.mark_set("insert", "end")
@@ -240,65 +357,53 @@ class Workstation:
             self.terminal_text.delete(self.current_cmd_start, "end")
             self.terminal_text.insert("end", self.cmd_history[self.cmd_index])
             return "break"
-    
+
     def terminal_execute(self, event):
-        line = self.terminal_text.get(self.current_cmd_start, "end-1c").strip()
-        if not line: self.terminal_prompt(); return "break"
-        
-        self.cmd_history.append(line); self.cmd_index = len(self.cmd_history)
-        
-        if line in ["clear", "cls"]:
-            self.terminal_text.delete("1.0", tk.END)
-            self.terminal_text.insert(tk.END, "Motherbrain Terminal v2.1\n", "info")
-            self.terminal_prompt(); return "break"
-        
-        # Run command in background thread
-        threading.Thread(target=self._terminal_run, args=(line,), daemon=True).start()
-        self.terminal_text.insert(tk.END, "\n", "output")
-        self.terminal_prompt()
+        line = self.terminal_text.get(self.current_cmd_start, "end-1c").rstrip("\n")
+        # Advance insert past typed line
+        self.terminal_text.insert(tk.END, "\n")
+        self.current_cmd_start = self.terminal_text.index("end-1c")
+
+        stripped = line.strip()
+        if stripped:
+            self.cmd_history.append(stripped)
+            self.cmd_index = len(self.cmd_history)
+
+        if stripped in ("clear", "cls"):
+            self.terminal_clear()
+            return "break"
+
+        # Live WSL session: pipe the line to bash stdin
+        if self.wsl_proc and self.wsl_proc.poll() is None and self.wsl_proc.stdin:
+            try:
+                self.wsl_proc.stdin.write((line + "\n").encode("utf-8"))
+                self.wsl_proc.stdin.flush()
+            except Exception as e:
+                self.terminal_text.insert(tk.END, f"[WSL write error: {e}]\n", "error")
+            return "break"
+
+        # Fallback when WSL missing: one-shot PowerShell / cmd
+        if stripped.startswith("win:"):
+            stripped = stripped[4:].strip()
+        if stripped:
+            threading.Thread(target=self._terminal_run_fallback, args=(stripped,), daemon=True).start()
+        else:
+            self.terminal_prompt()
         return "break"
-    
-    def _terminal_run(self, line):
-        """Execute terminal command in background thread."""
+
+    def _terminal_run_fallback(self, line):
+        """One-shot local shell when WSL is unavailable."""
         try:
-            if line == "help":
-                result = """
-AVAILABLE: ls, cd, pwd, cat, mkdir, rm, cp, mv, python, pip
-  vault list|stats|search <q>  - Vault operations
-  models list|download <repo>  - Model management
-  train <dataset> <model>      - Start Unsloth training
-  project new <name> <id>      - Create project
-  photo <path>                 - Analyze image
-  system info                  - Hardware info
-"""
-                self.ui_call(self.terminal_text.insert, tk.END, result, "output")
-            elif line.startswith("vault list"):
-                db = self.get_db()
-                rows = db.execute("SELECT id, name, status FROM projects").fetchall()
-                result = "\n".join(f"  [{r[2]}] {r[1]} ({r[0]})" for r in rows) or "  No projects."
-                self.ui_call(self.terminal_text.insert, tk.END, result + "\n", "output")
-                db.close()
-            elif line.startswith("models list"):
-                files = list(MODELS_DIR.glob("*"))
-                result = "\n".join(f"  {f.name} ({f.stat().st_size/(1024*1024):.1f} MB)" for f in files if f.is_file()) or "  No models."
-                self.ui_call(self.terminal_text.insert, tk.END, result + "\n", "output")
-            elif line == "system info":
-                r = subprocess.run("uname -a", shell=True, capture_output=True, text=True, timeout=5)
-                self.ui_call(self.terminal_text.insert, tk.END, r.stdout, "output")
-            elif line.startswith("train "):
-                parts = line.split()
-                if len(parts) >= 3:
-                    self.ui_call(self.terminal_text.insert, tk.END, f"  Training started: {parts[1]}\n", "info")
-                    subprocess.Popen(f"cd ~/motherbrain/shell && source venv/bin/activate && python train.py {parts[2]} {parts[1]}",
-                                    shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            else:
-                proc = subprocess.run(line, shell=True, capture_output=True, text=True, timeout=30, cwd=str(Path.home()))
-                if proc.stdout: self.ui_call(self.terminal_text.insert, tk.END, proc.stdout, "output")
-                if proc.stderr: self.ui_call(self.terminal_text.insert, tk.END, proc.stderr, "error")
-        except subprocess.TimeoutExpired:
-            self.ui_call(self.terminal_text.insert, tk.END, "[Timeout]\n", "error")
+            proc = subprocess.run(
+                line, shell=True, capture_output=True, text=True, timeout=60, cwd=str(Path.home()),
+            )
+            out = (proc.stdout or "") + (proc.stderr or "")
+            if out:
+                self.ui_call(self.terminal_text.insert, tk.END, out, "output" if proc.returncode == 0 else "error")
+            self.ui_call(self.terminal_prompt)
         except Exception as e:
             self.ui_call(self.terminal_text.insert, tk.END, f"[Error: {e}]\n", "error")
+            self.ui_call(self.terminal_prompt)
     
     # ═══════════════════════════════════════════════════════════
     # AI SERVER + SYNC
@@ -367,6 +472,8 @@ AVAILABLE: ls, cd, pwd, cat, mkdir, rm, cp, mv, python, pip
         self.clear_work(); self.set_bottom("AI Chat")
         
         toolbar = tk.Frame(self.work_frame, bg=PANEL_BG, height=35); toolbar.pack(fill=tk.X, padx=5, pady=(5,0))
+        title = self.current_chat_name or "New Chat"
+        tk.Label(toolbar, text=f"💬 {title}", fg=AI_COLOR, bg=PANEL_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=6)
         tk.Button(toolbar, text="📸 Photo", command=self.attach_photo, bg="#444", fg=TEXT_COLOR,
                  font=("Segoe UI", 8), relief=tk.FLAT, cursor="hand2", padx=10).pack(side=tk.LEFT, padx=3)
         tk.Button(toolbar, text="🧹 Clear", command=self.clear_context, bg="#444", fg=TEXT_COLOR,
@@ -394,8 +501,77 @@ AVAILABLE: ls, cd, pwd, cat, mkdir, rm, cp, mv, python, pip
         tk.Button(input_frame, text="Send", command=self.chat_send, bg=USER_COLOR, fg="white",
                  font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=20, pady=5, cursor="hand2").pack(side=tk.RIGHT, padx=(5,0))
         
-        self.chat_add("system", "AI ready." if self.server_ready else "AI loading...")
+        if self.chat_context:
+            for turn in self.chat_context:
+                if turn.get("user"):
+                    self.chat_add("you", turn["user"])
+                if turn.get("ai"):
+                    self.chat_add("ai", turn["ai"])
+        else:
+            self.chat_add("system", "AI ready." if self.server_ready else "AI loading...")
         self.chat_input.focus_set()
+
+    def refresh_chat_list(self):
+        if not hasattr(self, "chat_listbox"):
+            return
+        self.chat_listbox.delete(0, tk.END)
+        CHATS_DIR.mkdir(parents=True, exist_ok=True)
+        for f in sorted(CHATS_DIR.glob("*.json"), reverse=True):
+            self.chat_listbox.insert(tk.END, f.stem)
+
+    def new_chat(self):
+        name = simpledialog.askstring("New Chat", "Chat name:") or datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.current_chat_name = name
+        self.current_chat_file = CHATS_DIR / f"{name}.json"
+        self.chat_context = []
+        self.photo_path = None
+        if not self.current_chat_file.exists():
+            self.current_chat_file.write_text("[]", encoding="utf-8")
+        self.refresh_chat_list()
+        self.show_chat()
+
+    def load_chat(self, event=None):
+        sel = self.chat_listbox.curselection()
+        if not sel:
+            return
+        name = self.chat_listbox.get(sel[0])
+        self.current_chat_name = name
+        self.current_chat_file = CHATS_DIR / f"{name}.json"
+        try:
+            self.chat_context = json.loads(self.current_chat_file.read_text(encoding="utf-8"))
+            if not isinstance(self.chat_context, list):
+                self.chat_context = []
+        except Exception:
+            self.chat_context = []
+        self.show_chat()
+        self.set_bottom(f"Loaded chat: {name}")
+
+    def save_chat(self, user_text, ai_text, photo=None):
+        if not self.current_chat_file:
+            name = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.current_chat_name = name
+            self.current_chat_file = CHATS_DIR / f"{name}.json"
+            self.chat_context = []
+        try:
+            history = []
+            if self.current_chat_file.exists():
+                try:
+                    history = json.loads(self.current_chat_file.read_text(encoding="utf-8"))
+                except Exception:
+                    history = []
+            if not isinstance(history, list):
+                history = []
+            history.append({
+                "timestamp": datetime.now().isoformat(),
+                "user": user_text,
+                "ai": ai_text,
+                "photo": photo,
+            })
+            CHATS_DIR.mkdir(parents=True, exist_ok=True)
+            self.current_chat_file.write_text(json.dumps(history, indent=2), encoding="utf-8")
+            self.ui_call(self.refresh_chat_list)
+        except Exception:
+            pass
     
     def attach_photo(self):
         path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.gif *.bmp")])
@@ -440,6 +616,7 @@ AVAILABLE: ls, cd, pwd, cat, mkdir, rm, cp, mv, python, pip
             self.last_ai_response = ai
             self.chat_context.append({"user": text, "ai": ai})
             self.ui_call(self.chat_add, "ai", ai or "(empty)")
+            self.save_chat(text, ai, Path(self.photo_path).name if self.photo_path else None)
             mb_flywheel.log_turn(text, ai, self.current_project)
             if self.math_mode:
                 self.ui_call(self.render_math, ai)
@@ -934,6 +1111,11 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
     
     def on_close(self):
         if self._after_id: self.root.after_cancel(self._after_id)
+        try:
+            if self.wsl_proc and self.wsl_proc.poll() is None:
+                self.wsl_proc.terminate()
+        except Exception:
+            pass
         try:
             mb_inference.stop_server()
         except Exception:

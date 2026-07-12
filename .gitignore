@@ -6,6 +6,9 @@ models/*.gguf
 models/*.bin
 models/*.pt
 models/*.safetensors
+*.gguf
+# Never commit local vault / Hugging Face caches
+.motherbrain/
 
 # Python virtual environment
 shell/venv/
