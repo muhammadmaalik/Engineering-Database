@@ -18,15 +18,29 @@ def get_completion_url(cfg: dict[str, Any] | None = None) -> str:
     return paths.completion_url(cfg)
 
 
+def get_health_url(cfg: dict[str, Any] | None = None) -> str:
+    return paths.health_url(cfg)
+
+
 def is_ready(cfg: dict[str, Any] | None = None, timeout: float = 3.0) -> bool:
-    url = get_completion_url(cfg)
+    """True when llama-server answers GET /health (not a slow /completion probe).
+
+    Using /completion previously timed out on large models (e.g. Qwen 32B) even
+    when the server was already up, so the GUI stayed Offline / \"No Model\".
+    """
+    url = get_health_url(cfg)
     try:
-        r = requests.post(
-            url,
-            json={"prompt": "test", "n_predict": 1, "temperature": 0.0},
-            timeout=timeout,
-        )
-        return r.status_code == 200
+        r = requests.get(url, timeout=timeout)
+        if r.status_code != 200:
+            return False
+        # Prefer JSON {"status":"ok"} when present; accept plain 200 otherwise.
+        try:
+            data = r.json()
+            if isinstance(data, dict) and "status" in data:
+                return str(data.get("status", "")).lower() in ("ok", "healthy", "ready")
+        except ValueError:
+            pass
+        return True
     except requests.RequestException:
         return False
 

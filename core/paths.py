@@ -205,6 +205,11 @@ def inference_base_url(cfg: dict[str, Any] | None = None) -> str:
     return str(cfg.get("inference", {}).get("url", "http://127.0.0.1:8081")).rstrip("/")
 
 
+def health_url(cfg: dict[str, Any] | None = None) -> str:
+    """llama-server readiness endpoint (fast; does not run inference)."""
+    return f"{inference_base_url(cfg)}/health"
+
+
 def completion_url(cfg: dict[str, Any] | None = None) -> str:
     return f"{inference_base_url(cfg)}/completion"
 

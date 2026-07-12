@@ -192,6 +192,8 @@ class Workstation:
         
         threading.Thread(target=self.start_ai_server, daemon=True).start()
         threading.Thread(target=self.refresh_sync_status, daemon=True).start()
+        # Re-detect an externally started llama-server (e.g. already on :8081).
+        self.root.after(2000, self._poll_server_ready)
         self.show_chat()
     
     # ═══════════════════════════════════════════════════════════
@@ -409,23 +411,53 @@ class Workstation:
     # AI SERVER + SYNC
     # ═══════════════════════════════════════════════════════════
     
+    def _mark_ai_ready(self):
+        self.server_ready = True
+        active = mb_models.get_active_model()
+        label = active.get("filename") or "AI"
+        self.ui_call(self.top_status.config, {"text": f"● AI Ready ({label})", "fg": AI_COLOR})
+
+    def _poll_server_ready(self):
+        """Periodic health check so an already-running llama-server flips the UI online."""
+        if self.server_ready:
+            self.root.after(10000, self._poll_server_ready)
+            return
+
+        def _check():
+            if mb_inference.is_ready(timeout=2.0):
+                self._mark_ai_ready()
+            self.ui_call(lambda: self.root.after(3000, self._poll_server_ready))
+
+        threading.Thread(target=_check, daemon=True).start()
+
     def start_ai_server(self):
         self.ui_call(self.top_status.config, {"text": "● Starting...", "fg": WARN})
         try:
+            # External server already up (common when llama-server was started outside the app).
+            if mb_inference.is_ready(timeout=2.0):
+                self._mark_ai_ready()
+                return
             ok = mb_inference.start_server()
-            if ok or mb_inference.is_ready():
-                self.server_ready = True
-                active = mb_models.get_active_model()
-                label = active.get("filename") or "AI"
-                self.ui_call(self.top_status.config, {"text": f"● AI Ready ({label})", "fg": AI_COLOR})
+            if ok or mb_inference.is_ready(timeout=2.0):
+                self._mark_ai_ready()
             else:
                 self.server_ready = False
                 self.ui_call(self.top_status.config, {"text": "● AI Offline", "fg": "#ff4444"})
+                self.set_bottom("llama-server not reachable — check Start AI or run it on the config URL.")
         except FileNotFoundError as e:
+            # If the binary/model path is wrong but something is already serving, still go online.
+            if mb_inference.is_ready(timeout=2.0):
+                self._mark_ai_ready()
+                return
             self.server_ready = False
-            self.ui_call(self.top_status.config, {"text": "● No Model", "fg": "#ff4444"})
-            self.set_bottom(str(e))
+            msg = str(e)
+            label = "● No Model" if "Model not found" in msg else "● AI Offline"
+            self.ui_call(self.top_status.config, {"text": label, "fg": "#ff4444"})
+            self.set_bottom(msg)
         except Exception as e:
+            if mb_inference.is_ready(timeout=2.0):
+                self._mark_ai_ready()
+                return
             self.server_ready = False
             self.ui_call(self.top_status.config, {"text": "● Error", "fg": "#ff4444"})
             self.set_bottom(f"AI start error: {e}")

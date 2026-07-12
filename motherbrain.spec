@@ -6,15 +6,56 @@ Build:  powershell -File scripts/build_exe.ps1
 Output: dist/Motherbrain.exe
 """
 
-from PyInstaller.utils.hooks import collect_submodules
-
 block_cipher = None
 
-hidden = (
-    collect_submodules("core")
-    + collect_submodules("tools")
-    + ["requests", "urllib3", "certifi", "charset_normalizer", "idna"]
-)
+# Only ship modules the workstation GUI needs. collect_submodules("core") would
+# also pull web_companion (and optional ML stacks via huggingface hooks).
+hidden = [
+    "requests",
+    "urllib3",
+    "certifi",
+    "charset_normalizer",
+    "idna",
+    "huggingface_hub",
+    "PIL",
+    "PIL.Image",
+    "PIL.ImageTk",
+    "core",
+    "core.paths",
+    "core.context",
+    "core.tools",
+    "core.inference",
+    "core.models",
+    "core.sync",
+    "core.vault_index",
+    "core.flywheel",
+    "core.devices",
+    "tools",
+    "tools.system_agent",
+]
+
+# Keep the onefile under ~50MB — training/torch lives in shell/, not the GUI.
+excludes = [
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "tensorflow",
+    "tensorboard",
+    "pandas",
+    "numpy",
+    "scipy",
+    "sklearn",
+    "matplotlib",
+    "cv2",
+    "unsloth",
+    "transformers",
+    "accelerate",
+    "triton",
+    "sympy",
+    "IPython",
+    "notebook",
+    "core.web_companion",
+]
 
 a = Analysis(
     ["workstation.py"],
@@ -27,7 +68,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
