@@ -78,6 +78,10 @@ def start_server(
     if str(inf.get("mode", "local")).lower() == "remote":
         return is_ready(cfg)
 
+    # Already serving (e.g. started outside this process).
+    if is_ready(cfg, timeout=2.0):
+        return True
+
     model_path = Path(model) if model else paths.active_model_path(cfg)
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
