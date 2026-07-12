@@ -562,7 +562,8 @@ AVAILABLE: ls, cd, pwd, cat, mkdir, rm, cp, mv, python, pip
         if path: shutil.copy(path, cad_dir / Path(path).name); self.show_project_editor()
     
     def _add_device_dialog(self, manifest, mpath):
-        did = simpledialog.askstring("Device", "Device ID:"); if not did: return
+        did = simpledialog.askstring("Device", "Device ID:")
+        if not did: return
         manifest.setdefault("hardware",{}).setdefault("devices",[]).append({
             "device_id": did, "type": simpledialog.askstring("Type","Type:") or "unknown",
             "chip": simpledialog.askstring("Chip","Chip:") or "unknown",
@@ -681,13 +682,104 @@ AVAILABLE: ls, cd, pwd, cat, mkdir, rm, cp, mv, python, pip
     
     def show_model_manager(self):
         self.clear_work(); self.set_bottom("Models")
-        tk.Label(self.work_frame, text="📦 Models", fg=AI_COLOR, bg=BG, font=("Segoe UI", 16, "bold")).pack(anchor="w", padx=20, pady=(20,10))
-        text = scrolledtext.ScrolledText(self.work_frame, bg=CHAT_BG, fg=TEXT_COLOR, font=("Consolas", 10), relief=tk.FLAT, padx=15, pady=15)
-        text.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
-        if MODELS_DIR.exists():
-            for f in sorted(MODELS_DIR.iterdir()):
-                if f.is_file(): text.insert(tk.END, f"  {f.name} ({f.stat().st_size/(1024*1024):.1f} MB)\n")
-        text.configure(state=tk.DISABLED)
+        tk.Label(self.work_frame, text="📦 Model Manager", fg=AI_COLOR, bg=BG, font=("Segoe UI", 16, "bold")).pack(anchor="w", padx=20, pady=(20,10))
+
+        active = mb_models.get_active_model()
+        active_lbl = tk.Label(
+            self.work_frame,
+            text=f"Active: {active.get('filename')}  |  mode={active.get('mode')}  |  {active.get('url')}  |  exists={active.get('exists')}",
+            fg=TEXT_COLOR, bg=BG, font=("Consolas", 9), anchor="w",
+        )
+        active_lbl.pack(fill=tk.X, padx=20, pady=(0, 8))
+
+        list_frame = tk.Frame(self.work_frame, bg=BG)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
+        self.model_listbox = tk.Listbox(
+            list_frame, bg=CHAT_BG, fg=TEXT_COLOR, font=("Consolas", 10),
+            selectbackground=USER_COLOR, relief=tk.FLAT, highlightthickness=1, highlightbackground=BORDER,
+        )
+        self.model_listbox.pack(fill=tk.BOTH, expand=True)
+        self._model_entries = mb_models.list_all_models()
+        for m in self._model_entries:
+            name = m.get("filename") or m.get("name") or m.get("id") or "?"
+            size = m.get("size_bytes") or 0
+            size_s = f"{size/(1024*1024):.1f} MB" if size else "?"
+            src = m.get("source") or ""
+            marker = " ★" if name == active.get("filename") else ""
+            self.model_listbox.insert(tk.END, f"{name}  ({size_s})  [{src}]{marker}")
+
+        btn_f = tk.Frame(self.work_frame, bg=BG); btn_f.pack(fill=tk.X, padx=20, pady=10)
+        tk.Button(btn_f, text="Set Active", command=self._models_set_active, bg=USER_COLOR, fg="white",
+                 font=("Segoe UI", 9), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.LEFT, padx=3)
+        tk.Button(btn_f, text="Download / Set Qwen 32B", command=lambda: threading.Thread(target=self._models_download_qwen32b, daemon=True).start(),
+                 bg=AI_COLOR, fg=BG, font=("Segoe UI", 9, "bold"), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.LEFT, padx=3)
+        tk.Button(btn_f, text="Apply Gemma 9B preset", command=self._models_apply_gemma, bg="#444", fg=TEXT_COLOR,
+                 font=("Segoe UI", 9), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.LEFT, padx=3)
+        tk.Button(btn_f, text="⚡ Start AI", command=lambda: threading.Thread(target=self.start_ai_server, daemon=True).start(),
+                 bg="#2a5a2a", fg=TEXT_COLOR, font=("Segoe UI", 9), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.LEFT, padx=3)
+        tk.Button(btn_f, text="Refresh", command=self.show_model_manager, bg="#444", fg=TEXT_COLOR,
+                 font=("Segoe UI", 9), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.RIGHT, padx=3)
+
+        self.model_status = tk.Label(self.work_frame, text="", fg=DIM, bg=BG, font=("Consolas", 9), anchor="w")
+        self.model_status.pack(fill=tk.X, padx=20, pady=(0, 10))
+
+    def _models_selected_filename(self):
+        sel = self.model_listbox.curselection()
+        if not sel:
+            return None
+        entry = self._model_entries[sel[0]]
+        return entry.get("filename") or Path(entry.get("file_path") or entry.get("path") or "").name
+
+    def _models_set_active(self):
+        name = self._models_selected_filename()
+        if not name:
+            messagebox.showwarning("Models", "Select a model first."); return
+        mb_models.set_active_model(name)
+        self.set_bottom(f"Active model: {name}")
+        self.show_model_manager()
+
+    def _models_apply_gemma(self):
+        try:
+            mb_models.apply_preset("gemma-9b")
+            self.set_bottom("Applied Gemma 9B preset")
+            self.show_model_manager()
+        except Exception as e:
+            messagebox.showerror("Preset", str(e))
+
+    def _models_download_qwen32b(self):
+        preset = mb_models.PRESETS["qwen-32b"]
+        self.ui_call(self.model_status.config, {"text": f"Downloading {preset['filename']} from {preset['repo']}..."})
+        self.set_bottom(f"Downloading {preset['filename']}...")
+        try:
+            from huggingface_hub import hf_hub_download, list_repo_files
+            MODELS_DIR.mkdir(parents=True, exist_ok=True)
+            files = list_repo_files(preset["repo"])
+            ggufs = [f for f in files if f.endswith(".gguf") and preset["quant"] in f]
+            selected = ggufs[0] if ggufs else preset["filename"]
+            # Prefer exact filename match if present
+            for f in files:
+                if f.endswith(preset["filename"]) or Path(f).name == preset["filename"]:
+                    selected = f
+                    break
+            hf_hub_download(
+                repo_id=preset["repo"],
+                filename=selected,
+                local_dir=str(MODELS_DIR),
+                local_dir_use_symlinks=False,
+            )
+            mb_models.apply_preset("qwen-32b")
+            self.ui_call(self.model_status.config, {"text": f"Ready: {preset['filename']} set active."})
+            self.set_bottom(f"Qwen 32B ready: {preset['filename']}")
+            self.ui_call(self.show_model_manager)
+        except Exception as e:
+            # Still set preset so config points at the expected file
+            try:
+                mb_models.apply_preset("qwen-32b")
+            except Exception:
+                pass
+            self.ui_call(self.model_status.config, {"text": f"Download/set error: {e}"})
+            self.set_bottom(f"Qwen 32B: {e}")
+            self.ui_call(self.show_model_manager)
     
     def show_vault_explorer(self):
         self.clear_work(); self.set_bottom("Vault")
@@ -768,17 +860,71 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
     def show_settings(self):
         self.clear_work(); self.set_bottom("Settings")
         tk.Label(self.work_frame, text="⚙️ Settings", fg=AI_COLOR, bg=BG, font=("Segoe UI", 16, "bold")).pack(anchor="w", padx=20, pady=(20,10))
-        for l, d in [("Model Path",str(DEFAULT_MODEL)),("Port","8081"),("Context","8192"),("GPU Layers","99"),("Temperature","0.7"),("Max Tokens","2048")]:
+        cfg = mb_paths.load_config()
+        inf = cfg.get("inference") or {}
+        sync_cfg = cfg.get("sync") or {}
+
+        self.settings_vars = {
+            "mode": tk.StringVar(value=str(inf.get("mode", "local"))),
+            "url": tk.StringVar(value=str(inf.get("url", "http://127.0.0.1:8081"))),
+            "model": tk.StringVar(value=str(inf.get("model", ""))),
+            "ngl": tk.StringVar(value=str(inf.get("ngl", 99))),
+            "ctx": tk.StringVar(value=str(inf.get("ctx", 8192))),
+            "sync_url": tk.StringVar(value=str(sync_cfg.get("server_url", ""))),
+            "sync_token": tk.StringVar(value=str(sync_cfg.get("token", ""))),
+            "role": tk.StringVar(value=str(cfg.get("role", "laptop"))),
+        }
+        fields = [
+            ("Inference mode (local/remote)", "mode"),
+            ("Inference URL", "url"),
+            ("Active model (filename)", "model"),
+            ("GPU layers (ngl)", "ngl"),
+            ("Context size", "ctx"),
+            ("Sync server URL", "sync_url"),
+            ("Sync token", "sync_token"),
+            ("Role (home/laptop)", "role"),
+        ]
+        for label, key in fields:
             f = tk.Frame(self.work_frame, bg=BG); f.pack(fill=tk.X, padx=20, pady=3)
-            tk.Label(f, text=l+":", fg=TEXT_COLOR, bg=BG, width=15, anchor="w").pack(side=tk.LEFT)
-            tk.Entry(f, bg=INPUT_BG, fg=TEXT_COLOR, relief=tk.FLAT).pack(side=tk.LEFT, fill=tk.X, expand=True)
-            tk.Entry(f).insert(0, d)
-        tk.Button(self.work_frame, text="Save", command=lambda: messagebox.showinfo("Saved","Restart to apply."),
+            tk.Label(f, text=label + ":", fg=TEXT_COLOR, bg=BG, width=28, anchor="w").pack(side=tk.LEFT)
+            tk.Entry(f, textvariable=self.settings_vars[key], bg=INPUT_BG, fg=TEXT_COLOR, relief=tk.FLAT).pack(
+                side=tk.LEFT, fill=tk.X, expand=True
+            )
+        tk.Button(self.work_frame, text="Save", command=self.save_settings,
                  bg=AI_COLOR, fg=BG, font=("Segoe UI", 11, "bold"), relief=tk.FLAT, cursor="hand2", padx=25, pady=10).pack(pady=15)
+
+    def save_settings(self):
+        cfg = mb_paths.load_config()
+        try:
+            ngl = int(self.settings_vars["ngl"].get().strip() or "99")
+            ctx = int(self.settings_vars["ctx"].get().strip() or "8192")
+        except ValueError:
+            messagebox.showerror("Settings", "ngl and ctx must be integers."); return
+        cfg["inference"] = {
+            **(cfg.get("inference") or {}),
+            "mode": self.settings_vars["mode"].get().strip() or "local",
+            "url": self.settings_vars["url"].get().strip().rstrip("/"),
+            "model": self.settings_vars["model"].get().strip(),
+            "ngl": ngl,
+            "ctx": ctx,
+        }
+        cfg["sync"] = {
+            **(cfg.get("sync") or {}),
+            "server_url": self.settings_vars["sync_url"].get().strip().rstrip("/"),
+            "token": self.settings_vars["sync_token"].get(),
+        }
+        cfg["role"] = self.settings_vars["role"].get().strip() or "laptop"
+        mb_paths.save_config(cfg)
+        messagebox.showinfo("Saved", "Config written to ~/.motherbrain/config.json")
+        self.set_bottom("Settings saved.")
+        threading.Thread(target=self.refresh_sync_status, daemon=True).start()
     
     def on_close(self):
         if self._after_id: self.root.after_cancel(self._after_id)
-        if self.server_process: self.server_process.terminate()
+        try:
+            mb_inference.stop_server()
+        except Exception:
+            pass
         self.root.destroy()
 
 

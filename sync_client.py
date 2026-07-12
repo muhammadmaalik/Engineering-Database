@@ -6,7 +6,7 @@ Syncs vault with home PC; AI runs local 32B or remote home GPU per config.
 
 import tkinter as tk
 from tkinter import scrolledtext, messagebox, ttk, filedialog, simpledialog
-import threading, json, sqlite3, time, os, sys
+import threading, json, sqlite3, sys
 from pathlib import Path
 from datetime import datetime
 from queue import Queue, Empty
