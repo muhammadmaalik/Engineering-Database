@@ -56,4 +56,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    manifest="motherbrain.manifest",  # Per-monitor DPI aware (sharp Tk on Windows)
 )

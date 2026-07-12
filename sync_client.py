@@ -4,9 +4,22 @@ Full Sync Client - Complete Motherbrain platform on laptop.
 Syncs vault with home PC; AI runs local 32B or remote home GPU per config.
 """
 
+import sys
+
+# Windows high-DPI: must run before Tk is created (avoids blurry scaled UI).
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI aware
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
 import tkinter as tk
 from tkinter import scrolledtext, messagebox, ttk, filedialog, simpledialog
-import threading, json, sqlite3, sys
+import threading, json, sqlite3
 from pathlib import Path
 from datetime import datetime
 from queue import Queue, Empty

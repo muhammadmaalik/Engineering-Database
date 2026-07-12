@@ -21,6 +21,7 @@ build/
 
 # PyInstaller
 *.manifest
+!motherbrain.manifest
 # Keep motherbrain.spec in repo; ignore accidental onefile leftovers
 warn-*.txt
 
