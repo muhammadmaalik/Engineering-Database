@@ -30,6 +30,7 @@ hidden = [
     "core.vault_index",
     "core.flywheel",
     "core.devices",
+    "core.isaac_sim",
     "tools",
     "tools.system_agent",
 ]

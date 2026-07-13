@@ -106,6 +106,15 @@ def build_prompt(project_id: str | None = None, *, include_tools: bool = False) 
     else:
         lines.append("  (none bound)")
 
+    # Isaac Sim bridge (optional)
+    try:
+        from . import isaac_sim as isaac_mod
+
+        lines.append("")
+        lines.append(isaac_mod.describe_for_prompt())
+    except Exception:
+        pass
+
     # Bound AI models / adapters
     ai = manifest.get("ai") or {}
     models = ai.get("models") or []

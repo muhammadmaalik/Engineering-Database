@@ -116,6 +116,51 @@ def search_files(pattern: str, directory: str = "~") -> str:
         return f"Error: {e}"
 
 
+def _isaac():
+    from core import isaac_sim
+
+    return isaac_sim
+
+
+def isaac_status() -> str:
+    status = _isaac().ping()
+    return json.dumps(status.as_dict(), indent=2)
+
+
+def isaac_scene() -> str:
+    return json.dumps(_isaac().get_scene_summary(), indent=2)
+
+
+def isaac_list_prims(path: str = "/World") -> str:
+    return json.dumps(_isaac().list_prims(path), indent=2)
+
+
+def isaac_play() -> str:
+    return json.dumps(_isaac().play(), indent=2)
+
+
+def isaac_pause() -> str:
+    return json.dumps(_isaac().pause(), indent=2)
+
+
+def isaac_reset() -> str:
+    return json.dumps(_isaac().reset(), indent=2)
+
+
+def isaac_set_joints(spec: str) -> str:
+    """Parse ``joint=1.2,joint2=0.5`` into set_joint_targets."""
+    targets: dict[str, float] = {}
+    for part in (spec or "").split(","):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        name, raw = part.split("=", 1)
+        targets[name.strip()] = float(raw.strip())
+    if not targets:
+        return "Error: expected joint=value,joint2=value2"
+    return json.dumps(_isaac().set_joint_targets(targets), indent=2)
+
+
 # Tool registry — what the AI can call
 TOOLS = {
     "read_file": read_file,
@@ -123,6 +168,13 @@ TOOLS = {
     "list_directory": list_directory,
     "run_command": run_command,
     "search_files": search_files,
+    "isaac_status": isaac_status,
+    "isaac_scene": isaac_scene,
+    "isaac_list_prims": isaac_list_prims,
+    "isaac_play": isaac_play,
+    "isaac_pause": isaac_pause,
+    "isaac_reset": isaac_reset,
+    "isaac_set_joints": isaac_set_joints,
 }
 
 TOOL_DESCRIPTIONS = """
@@ -132,6 +184,11 @@ Available tools:
 - list_directory(path) — List files and folders
 - run_command(command) — Execute a shell command
 - search_files(pattern, directory) — Find files by pattern
+- isaac_status() — Isaac Sim bridge ping/status
+- isaac_scene() — Scene summary from the bridge
+- isaac_list_prims(path) — List USD children under a prim
+- isaac_play() / isaac_pause() / isaac_reset() — Timeline control
+- isaac_set_joints(joint=value,...) — Set articulation joint targets
 """
 
 if __name__ == "__main__":

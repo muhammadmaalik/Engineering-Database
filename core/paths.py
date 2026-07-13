@@ -83,6 +83,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # Desktop + phone chat: tools off until inference is stable.
         "allow_tools": False,
     },
+    # TCP JSON bridge to Isaac Sim (see isaac_sim/bridge_server.py).
+    "isaac_sim": {
+        "enabled": False,
+        "host": "127.0.0.1",
+        "port": 8765,
+        "timeout": 3.0,
+        "transport": "tcp",
+        "ros_domain_id": 0,
+        "default_robot_prim": "/World/Robot",
+    },
     "role": "laptop",
 }
 

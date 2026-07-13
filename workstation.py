@@ -33,6 +33,7 @@ from core import models as mb_models
 from core import sync as mb_sync
 from core import vault_index as mb_vault
 from core import flywheel as mb_flywheel
+from core import isaac_sim as mb_isaac
 
 # ─── Paths (from companion core) ─────────────────────────────
 mb_paths.ensure_dirs()
@@ -120,6 +121,7 @@ class Workstation:
             ("🗄️  Vault Explorer", self.show_vault_explorer),
             ("📸  Photo Analyzer", self.show_photo_analyzer),
             ("🔧  Hardware Config", self.show_hardware_config),
+            ("🤖  Isaac Sim", self.show_isaac_sim),
             ("📚  Dataset Manager", self.show_dataset_manager),
             ("🔄  Git Sync", self.show_git_sync),
             ("⚙️  Settings", self.show_settings),
@@ -1091,12 +1093,187 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
         msg = simpledialog.askstring("Commit", "Message:")
         if msg: self._git(f'git add . && git commit -m "{msg}"')
     
+    def show_isaac_sim(self):
+        self.clear_work()
+        self.set_bottom("Isaac Sim")
+        tk.Label(
+            self.work_frame,
+            text="🤖 Isaac Sim Bridge",
+            fg=AI_COLOR,
+            bg=BG,
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w", padx=20, pady=(20, 6))
+        tk.Label(
+            self.work_frame,
+            text="Motherbrain talks to Isaac over TCP JSON (default 127.0.0.1:8765).\n"
+                 "Start isaac_sim/bridge_server.py inside Isaac, then enable below.",
+            fg=DIM,
+            bg=BG,
+            font=("Consolas", 9),
+            justify="left",
+        ).pack(anchor="w", padx=20, pady=(0, 12))
+
+        cfg = mb_paths.load_config()
+        isaac = cfg.get("isaac_sim") or {}
+        self.isaac_vars = {
+            "enabled": tk.StringVar(value="true" if isaac.get("enabled") else "false"),
+            "host": tk.StringVar(value=str(isaac.get("host", "127.0.0.1"))),
+            "port": tk.StringVar(value=str(isaac.get("port", 8765))),
+            "transport": tk.StringVar(value=str(isaac.get("transport", "tcp"))),
+            "ros_domain_id": tk.StringVar(value=str(isaac.get("ros_domain_id", 0))),
+            "default_robot_prim": tk.StringVar(
+                value=str(isaac.get("default_robot_prim", "/World/Robot"))
+            ),
+        }
+        for label, key in [
+            ("Enabled (true/false)", "enabled"),
+            ("Bridge host", "host"),
+            ("Bridge port", "port"),
+            ("Transport (tcp/ros2)", "transport"),
+            ("ROS_DOMAIN_ID", "ros_domain_id"),
+            ("Default robot prim", "default_robot_prim"),
+        ]:
+            f = tk.Frame(self.work_frame, bg=BG)
+            f.pack(fill=tk.X, padx=20, pady=3)
+            tk.Label(f, text=label + ":", fg=TEXT_COLOR, bg=BG, width=28, anchor="w").pack(
+                side=tk.LEFT
+            )
+            tk.Entry(
+                f,
+                textvariable=self.isaac_vars[key],
+                bg=INPUT_BG,
+                fg=TEXT_COLOR,
+                relief=tk.FLAT,
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        btn_row = tk.Frame(self.work_frame, bg=BG)
+        btn_row.pack(anchor="w", padx=20, pady=12)
+        tk.Button(
+            btn_row,
+            text="Save",
+            command=self.save_isaac_settings,
+            bg=AI_COLOR,
+            fg=BG,
+            font=("Segoe UI", 10, "bold"),
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=18,
+            pady=8,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(
+            btn_row,
+            text="Test Connection",
+            command=lambda: threading.Thread(target=self.test_isaac_connection, daemon=True).start(),
+            bg="#2a3a5a",
+            fg=TEXT_COLOR,
+            font=("Segoe UI", 10),
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=18,
+            pady=8,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        for label, cmd in [
+            ("Play", lambda: self._isaac_action("play")),
+            ("Pause", lambda: self._isaac_action("pause")),
+            ("Reset", lambda: self._isaac_action("reset")),
+        ]:
+            tk.Button(
+                btn_row,
+                text=label,
+                command=cmd,
+                bg="#333",
+                fg=TEXT_COLOR,
+                font=("Consolas", 9),
+                relief=tk.FLAT,
+                cursor="hand2",
+                padx=12,
+                pady=8,
+            ).pack(side=tk.LEFT, padx=4)
+
+        self.isaac_status_box = scrolledtext.ScrolledText(
+            self.work_frame,
+            bg=CHAT_BG,
+            fg=TEXT_COLOR,
+            font=("Consolas", 9),
+            relief=tk.FLAT,
+            height=14,
+        )
+        self.isaac_status_box.pack(fill=tk.BOTH, expand=True, padx=20, pady=(4, 16))
+        threading.Thread(target=self.test_isaac_connection, daemon=True).start()
+
+    def save_isaac_settings(self):
+        cfg = mb_paths.load_config()
+        try:
+            port = int(self.isaac_vars["port"].get().strip() or "8765")
+            domain = int(self.isaac_vars["ros_domain_id"].get().strip() or "0")
+        except ValueError:
+            messagebox.showerror("Isaac Sim", "port and ros_domain_id must be integers.")
+            return
+        enabled = self.isaac_vars["enabled"].get().strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        cfg["isaac_sim"] = {
+            **(cfg.get("isaac_sim") or {}),
+            "enabled": enabled,
+            "host": self.isaac_vars["host"].get().strip() or "127.0.0.1",
+            "port": port,
+            "timeout": float((cfg.get("isaac_sim") or {}).get("timeout", 3.0) or 3.0),
+            "transport": self.isaac_vars["transport"].get().strip() or "tcp",
+            "ros_domain_id": domain,
+            "default_robot_prim": self.isaac_vars["default_robot_prim"].get().strip()
+            or "/World/Robot",
+        }
+        mb_paths.save_config(cfg)
+        messagebox.showinfo("Saved", "Isaac Sim settings written to ~/.motherbrain/config.json")
+        self.set_bottom("Isaac Sim settings saved.")
+        threading.Thread(target=self.test_isaac_connection, daemon=True).start()
+
+    def test_isaac_connection(self):
+        status = mb_isaac.ping()
+        scene = mb_isaac.get_scene_summary() if status.connected else {"ok": False}
+        text = (
+            f"{mb_isaac.describe_for_prompt()}\n\n"
+            f"status = {json.dumps(status.as_dict(), indent=2)}\n\n"
+            f"scene  = {json.dumps(scene, indent=2)}\n"
+        )
+
+        def _ui():
+            if hasattr(self, "isaac_status_box"):
+                self.isaac_status_box.delete("1.0", tk.END)
+                self.isaac_status_box.insert(tk.END, text)
+            self.set_bottom(
+                "Isaac Sim online" if status.connected else f"Isaac Sim offline — {status.detail}"
+            )
+
+        self.ui_queue.put(_ui)
+
+    def _isaac_action(self, action: str):
+        def _run():
+            fn = {"play": mb_isaac.play, "pause": mb_isaac.pause, "reset": mb_isaac.reset}.get(
+                action
+            )
+            result = fn() if fn else {"ok": False, "error": "unknown action"}
+            self.ui_queue.put(
+                lambda: (
+                    self.isaac_status_box.insert(tk.END, f"\n{action} → {json.dumps(result)}\n")
+                    if hasattr(self, "isaac_status_box")
+                    else None
+                )
+            )
+            self.test_isaac_connection()
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def show_settings(self):
         self.clear_work(); self.set_bottom("Settings")
         tk.Label(self.work_frame, text="⚙️ Settings", fg=AI_COLOR, bg=BG, font=("Segoe UI", 16, "bold")).pack(anchor="w", padx=20, pady=(20,10))
         cfg = mb_paths.load_config()
         inf = cfg.get("inference") or {}
         sync_cfg = cfg.get("sync") or {}
+        isaac = cfg.get("isaac_sim") or {}
 
         self.settings_vars = {
             "mode": tk.StringVar(value=str(inf.get("mode", "local"))),
@@ -1107,6 +1284,9 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
             "sync_url": tk.StringVar(value=str(sync_cfg.get("server_url", ""))),
             "sync_token": tk.StringVar(value=str(sync_cfg.get("token", ""))),
             "role": tk.StringVar(value=str(cfg.get("role", "laptop"))),
+            "isaac_enabled": tk.StringVar(value="true" if isaac.get("enabled") else "false"),
+            "isaac_host": tk.StringVar(value=str(isaac.get("host", "127.0.0.1"))),
+            "isaac_port": tk.StringVar(value=str(isaac.get("port", 8765))),
         }
         fields = [
             ("Inference mode (local/remote)", "mode"),
@@ -1117,6 +1297,9 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
             ("Sync server URL", "sync_url"),
             ("Sync token", "sync_token"),
             ("Role (home/laptop)", "role"),
+            ("Isaac Sim enabled (true/false)", "isaac_enabled"),
+            ("Isaac bridge host", "isaac_host"),
+            ("Isaac bridge port", "isaac_port"),
         ]
         for label, key in fields:
             f = tk.Frame(self.work_frame, bg=BG); f.pack(fill=tk.X, padx=20, pady=3)
@@ -1132,8 +1315,9 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
         try:
             ngl = int(self.settings_vars["ngl"].get().strip() or "28")
             ctx = int(self.settings_vars["ctx"].get().strip() or "2048")
+            isaac_port = int(self.settings_vars["isaac_port"].get().strip() or "8765")
         except ValueError:
-            messagebox.showerror("Settings", "ngl and ctx must be integers."); return
+            messagebox.showerror("Settings", "ngl, ctx, and isaac port must be integers."); return
         cfg["inference"] = {
             **(cfg.get("inference") or {}),
             "mode": self.settings_vars["mode"].get().strip() or "local",
@@ -1148,6 +1332,18 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
             **(cfg.get("sync") or {}),
             "server_url": self.settings_vars["sync_url"].get().strip().rstrip("/"),
             "token": self.settings_vars["sync_token"].get(),
+        }
+        enabled = self.settings_vars["isaac_enabled"].get().strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        cfg["isaac_sim"] = {
+            **(cfg.get("isaac_sim") or {}),
+            "enabled": enabled,
+            "host": self.settings_vars["isaac_host"].get().strip() or "127.0.0.1",
+            "port": isaac_port,
         }
         cfg["role"] = self.settings_vars["role"].get().strip() or "laptop"
         mb_paths.save_config(cfg)

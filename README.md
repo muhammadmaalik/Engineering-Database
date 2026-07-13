@@ -6,8 +6,9 @@ Local-first AI companion platform for custom hardware projects. Hybrid topology:
 
 - **kernel/** — C++20 daemon. Shared memory IPC, hardware abstraction, inference scheduler.
 - **shell/** — Python CLI. Model management, dataset curation, training export.
-- **core/** — Shared companion core (context, tools, inference, models, sync, flywheel, web companion).
-- **workstation.py** — Home GUI (project-aware companion chat, models, sync).
+- **core/** — Shared companion core (context, tools, inference, models, sync, flywheel, web companion, Isaac Sim client).
+- **isaac_sim/** — TCP bridge to run inside NVIDIA Isaac Sim.
+- **workstation.py** — Home GUI (project-aware companion chat, models, sync, Isaac Sim).
 - **sync_client.py** — Laptop client (vault sync + companion chat).
 - **sync_server.py** — Home vault sync HTTP server (`:8090`).
 - **web_companion.py** — Hardened HTTPS phone UI (WireGuard bind + token auth).
@@ -129,10 +130,60 @@ python3 shell/main.py export        # JSONL with project_id metadata
 python3 shell/main.py exportpairs
 ```
 
+## Isaac Sim
+
+Motherbrain does **not** embed Isaac Sim. It connects over a small TCP JSON-line bridge so the workstation (and companion tools) can control a running Sim.
+
+```
+Motherbrain.exe  ──TCP :8765──▶  isaac_sim/bridge_server.py  ──▶  Isaac scene / articulations
+                                      (runs in Isaac Python)
+```
+
+### 1. Start the bridge inside Isaac
+
+With Isaac’s Python (or Script Editor after the stage is loaded):
+
+```bash
+# Mock / protocol smoke-test (system Python):
+python isaac_sim/bridge_server.py --host 127.0.0.1 --port 8765
+
+# With Isaac installed (use Isaac's python.bat / python.sh):
+C:\isaacsim\python.bat isaac_sim\run_with_isaac.py --usd C:\path\to\scene.usd
+```
+
+### 2. Enable in Motherbrain
+
+In the GUI: **Isaac Sim** nav panel (or Settings) → set `enabled=true`, host/port, save, **Test Connection**.
+
+Or edit `~/.motherbrain/config.json`:
+
+```json
+"isaac_sim": {
+  "enabled": true,
+  "host": "127.0.0.1",
+  "port": 8765,
+  "timeout": 3.0,
+  "transport": "tcp",
+  "ros_domain_id": 0,
+  "default_robot_prim": "/World/Robot"
+}
+```
+
+### Protocol methods
+
+`ping`, `get_scene`, `list_prims`, `set_joint_targets`, `play`, `pause`, `reset`.
+
+Companion tools (when tools are enabled): `isaac_status`, `isaac_scene`, `isaac_list_prims`, `isaac_play`, `isaac_pause`, `isaac_reset`, `isaac_set_joints`.
+
+### Optional ROS 2
+
+For high-rate sensors/actuators, enable Isaac’s `isaacsim.ros2.bridge` and match `ROS_DOMAIN_ID` with `isaac_sim.ros_domain_id`. Keep the TCP bridge for Motherbrain status/commands.
+
 ## Hardware targets
 
 - Smart glasses (ESP32-based wearable)
 - Custom robotics platforms
+- NVIDIA Isaac Sim (TCP bridge above)
 - Any microcontroller speaking the Motherbrain binary protocol
 
 Firmware / MQTT hooks exist as stubs in `core/devices.py`; no robot firmware in this pass.

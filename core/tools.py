@@ -29,6 +29,13 @@ Available tools:
 - list_directory|path
 - run_command|command
 - search_files|pattern|directory
+- isaac_status
+- isaac_scene
+- isaac_list_prims|path
+- isaac_play
+- isaac_pause
+- isaac_reset
+- isaac_set_joints|joint=value,joint2=value2
 """.strip()
 
 # Keep tool loops short: each round is a full /completion (easy to hit read timeouts
