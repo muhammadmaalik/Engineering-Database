@@ -34,6 +34,7 @@ from core import sync as mb_sync
 from core import vault_index as mb_vault
 from core import flywheel as mb_flywheel
 from core import isaac_sim as mb_isaac
+from core import auth as mb_auth
 
 # ─── Paths (from companion core) ─────────────────────────────
 mb_paths.ensure_dirs()
@@ -123,7 +124,7 @@ class Workstation:
             ("🔧  Hardware Config", self.show_hardware_config),
             ("🤖  Isaac Sim", self.show_isaac_sim),
             ("📚  Dataset Manager", self.show_dataset_manager),
-            ("🔄  Git Sync", self.show_git_sync),
+            ("🔄  Vault Sync", self.show_vault_sync),
             ("⚙️  Settings", self.show_settings),
         ]
         
@@ -474,19 +475,32 @@ class Workstation:
             color = AI_COLOR
             if isinstance(health, dict) and health.get("status"):
                 msg = f"● Sync {health.get('status')} ({url})"
-        except Exception:
+            detail = json.dumps(health, indent=2) if isinstance(health, dict) else str(health)
+        except Exception as e:
             msg = f"● Sync offline ({url})"
             color = "#ff4444"
+            detail = str(e)
         self.sync_status_text = msg
         self.ui_call(self.sync_status.config, {"text": msg, "fg": color})
+
+        def _log():
+            if hasattr(self, "vault_sync_log"):
+                self.vault_sync_log.insert(tk.END, f"\n{msg}\n{detail}\n")
+                self.vault_sync_log.see(tk.END)
+
+        self.ui_queue.put(_log)
 
     def run_sync_now(self):
         self.ui_call(self.sync_status.config, {"text": "● Syncing...", "fg": WARN})
         self.set_bottom("Sync in progress...")
         try:
             result = mb_sync.SyncClient().sync_all()
-            pulled = result.get("pull", {}).get("count", 0)
-            pushed = result.get("push", {}).get("count", len(result.get("push", {}).get("pushed", []) or []))
+            pull = result.get("pull") or {}
+            push = result.get("push") or {}
+            pulled = pull.get("count", len(pull.get("pulled") or []))
+            pushed = push.get("count", len(push.get("pushed") or push.get("written") or []))
+            if not isinstance(pushed, int):
+                pushed = 0
             conflicts = len(result.get("conflicts") or [])
             msg = f"● Sync done (↓{pulled} ↑{pushed}"
             if conflicts:
@@ -494,10 +508,25 @@ class Workstation:
             msg += ")"
             self.ui_call(self.sync_status.config, {"text": msg, "fg": AI_COLOR})
             self.set_bottom(f"Sync complete: pulled={pulled} pushed={pushed} conflicts={conflicts}")
+
+            def _log():
+                if hasattr(self, "vault_sync_log"):
+                    self.vault_sync_log.insert(
+                        tk.END, f"\n{msg}\n{json.dumps(result, indent=2, default=str)}\n"
+                    )
+                    self.vault_sync_log.see(tk.END)
+
+            self.ui_queue.put(_log)
         except Exception as e:
             self.ui_call(self.sync_status.config, {"text": "● Sync failed", "fg": "#ff4444"})
             self.set_bottom(f"Sync error: {e}")
-    
+
+            def _err():
+                if hasattr(self, "vault_sync_log"):
+                    self.vault_sync_log.insert(tk.END, f"\nSync error: {e}\n")
+                    self.vault_sync_log.see(tk.END)
+
+            self.ui_queue.put(_err)    
     # ═══════════════════════════════════════════════════════════
     # AI CHAT (optimized)
     # ═══════════════════════════════════════════════════════════
@@ -1074,6 +1103,115 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
 """)
         text.configure(state=tk.DISABLED)
     
+    def show_vault_sync(self):
+        self.clear_work()
+        self.set_bottom("Vault Sync")
+        tk.Label(
+            self.work_frame,
+            text="Vault Sync",
+            fg=AI_COLOR,
+            bg=BG,
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w", padx=20, pady=(20, 6))
+        tk.Label(
+            self.work_frame,
+            text="Home PC runs sync_server.py :8090. Laptop points sync URL at home (WireGuard/LAN).\n"
+                 "Both machines must use the same sync token.",
+            fg=DIM,
+            bg=BG,
+            font=("Consolas", 9),
+            justify="left",
+        ).pack(anchor="w", padx=20, pady=(0, 10))
+
+        cfg = mb_paths.load_config()
+        sync_cfg = cfg.get("sync") or {}
+        self.vault_sync_vars = {
+            "sync_url": tk.StringVar(value=str(sync_cfg.get("server_url", "http://10.0.0.1:8090"))),
+            "sync_token": tk.StringVar(value=str(sync_cfg.get("token", ""))),
+            "role": tk.StringVar(value=str(cfg.get("role", "laptop"))),
+        }
+        for label, key, show in [
+            ("Server URL", "sync_url", None),
+            ("Sync token", "sync_token", "*"),
+            ("Role (home/laptop)", "role", None),
+        ]:
+            f = tk.Frame(self.work_frame, bg=BG)
+            f.pack(fill=tk.X, padx=20, pady=3)
+            tk.Label(f, text=label + ":", fg=TEXT_COLOR, bg=BG, width=22, anchor="w").pack(side=tk.LEFT)
+            e = tk.Entry(
+                f,
+                textvariable=self.vault_sync_vars[key],
+                bg=INPUT_BG,
+                fg=TEXT_COLOR,
+                relief=tk.FLAT,
+                show=show or "",
+            )
+            e.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            if key == "sync_token":
+                self._harden_secret_entry(e)
+
+        btn = tk.Frame(self.work_frame, bg=BG)
+        btn.pack(anchor="w", padx=20, pady=12)
+        tk.Button(
+            btn, text="Save", command=self.save_vault_sync,
+            bg=AI_COLOR, fg=BG, font=("Segoe UI", 10, "bold"),
+            relief=tk.FLAT, cursor="hand2", padx=16, pady=8,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(
+            btn, text="Test",
+            command=lambda: threading.Thread(target=self.refresh_sync_status, daemon=True).start(),
+            bg="#2a3a5a", fg=TEXT_COLOR, font=("Segoe UI", 10),
+            relief=tk.FLAT, cursor="hand2", padx=16, pady=8,
+        ).pack(side=tk.LEFT, padx=4)
+        tk.Button(
+            btn, text="Sync Now",
+            command=lambda: threading.Thread(target=self.run_sync_now, daemon=True).start(),
+            bg="#2a5a2a", fg=TEXT_COLOR, font=("Segoe UI", 10, "bold"),
+            relief=tk.FLAT, cursor="hand2", padx=16, pady=8,
+        ).pack(side=tk.LEFT, padx=4)
+
+        self.vault_sync_log = scrolledtext.ScrolledText(
+            self.work_frame, bg=CHAT_BG, fg=TEXT_COLOR, font=("Consolas", 9),
+            relief=tk.FLAT, height=14,
+        )
+        self.vault_sync_log.pack(fill=tk.BOTH, expand=True, padx=20, pady=(4, 16))
+        self.vault_sync_log.insert(
+            tk.END,
+            "Home PC:\n  1) Set role=home, note the sync token\n"
+            "  2) python sync_server.py\n"
+            "  3) WireGuard IP e.g. 10.0.0.1\n\n"
+            "Laptop:\n  1) Set sync URL to http://<home-wg-ip>:8090\n"
+            "  2) Paste the SAME sync token\n"
+            "  3) Sync Now\n",
+        )
+        threading.Thread(target=self.refresh_sync_status, daemon=True).start()
+
+    def save_vault_sync(self):
+        cfg = mb_paths.load_config()
+        cfg["sync"] = {
+            **(cfg.get("sync") or {}),
+            "server_url": self.vault_sync_vars["sync_url"].get().strip().rstrip("/"),
+            "token": self.vault_sync_vars["sync_token"].get().strip(),
+        }
+        cfg["role"] = self.vault_sync_vars["role"].get().strip() or "laptop"
+        mb_paths.save_config(cfg)
+        messagebox.showinfo("Saved", "Sync settings saved.")
+        self.set_bottom("Vault sync settings saved.")
+        threading.Thread(target=self.refresh_sync_status, daemon=True).start()
+
+    @staticmethod
+    def _harden_secret_entry(entry: tk.Entry) -> None:
+        """Block paste/copy/cut and context menu on secret fields."""
+        def _block(_event=None):
+            return "break"
+
+        for seq in (
+            "<<Paste>>", "<Control-v>", "<Control-V>", "<Shift-Insert>",
+            "<Control-c>", "<Control-C>", "<Control-x>", "<Control-X>",
+            "<Button-2>", "<Button-3>", "<Control-Insert>", "<Shift-Delete>",
+        ):
+            entry.bind(seq, _block)
+
     def show_git_sync(self):
         self.clear_work(); self.set_bottom("Git Sync")
         self.git_out = scrolledtext.ScrolledText(self.work_frame, bg="#000", fg="#00ff41", font=("Consolas", 9), relief=tk.FLAT, padx=10, pady=10)
@@ -1304,9 +1442,14 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
         for label, key in fields:
             f = tk.Frame(self.work_frame, bg=BG); f.pack(fill=tk.X, padx=20, pady=3)
             tk.Label(f, text=label + ":", fg=TEXT_COLOR, bg=BG, width=28, anchor="w").pack(side=tk.LEFT)
-            tk.Entry(f, textvariable=self.settings_vars[key], bg=INPUT_BG, fg=TEXT_COLOR, relief=tk.FLAT).pack(
-                side=tk.LEFT, fill=tk.X, expand=True
+            show = "*" if key in ("sync_token",) else ""
+            e = tk.Entry(
+                f, textvariable=self.settings_vars[key], bg=INPUT_BG, fg=TEXT_COLOR,
+                relief=tk.FLAT, show=show,
             )
+            e.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            if key == "sync_token":
+                self._harden_secret_entry(e)
         tk.Button(self.work_frame, text="Save", command=self.save_settings,
                  bg=AI_COLOR, fg=BG, font=("Segoe UI", 11, "bold"), relief=tk.FLAT, cursor="hand2", padx=25, pady=10).pack(pady=15)
 
@@ -1365,8 +1508,98 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
         self.root.destroy()
 
 
+def _pin_gate(parent: tk.Tk) -> bool:
+    """Modal unlock screen. Masked digits, no paste/copy, no hints. Max 5 tries."""
+    ok = {"value": False}
+    tries = {"n": 0}
+    gate = tk.Toplevel(parent)
+    gate.title("Motherbrain")
+    gate.configure(bg=HEADER_BG)
+    gate.resizable(False, False)
+    gate.attributes("-topmost", True)
+    gate.grab_set()
+    gate.focus_force()
+    w, h = 360, 200
+    gate.update_idletasks()
+    x = (gate.winfo_screenwidth() - w) // 2
+    y = (gate.winfo_screenheight() - h) // 2
+    gate.geometry(f"{w}x{h}+{x}+{y}")
+
+    tk.Label(
+        gate, text="MOTHERBRAIN", fg=AI_COLOR, bg=HEADER_BG,
+        font=("Consolas", 14, "bold"),
+    ).pack(pady=(28, 8))
+    tk.Label(gate, text="Enter PIN", fg=DIM, bg=HEADER_BG, font=("Consolas", 9)).pack()
+
+    pin_var = tk.StringVar()
+    entry = tk.Entry(
+        gate, textvariable=pin_var, show="*", bg=INPUT_BG, fg=TEXT_COLOR,
+        insertbackground=TEXT_COLOR, relief=tk.FLAT, font=("Consolas", 16),
+        justify="center", width=12,
+    )
+    entry.pack(pady=12, ipady=6)
+
+    status = tk.Label(gate, text="", fg=WARN, bg=HEADER_BG, font=("Consolas", 8))
+    status.pack()
+
+    def _block(_e=None):
+        return "break"
+
+    for seq in (
+        "<<Paste>>", "<Control-v>", "<Control-V>", "<Shift-Insert>",
+        "<Control-c>", "<Control-C>", "<Control-x>", "<Control-X>",
+        "<Button-2>", "<Button-3>", "<Control-Insert>", "<Shift-Delete>",
+        "<Control-a>", "<Control-A>",
+    ):
+        entry.bind(seq, _block)
+
+    def _filter_keys(event):
+        if event.keysym in ("BackSpace", "Delete", "Return", "Tab", "Escape"):
+            return None
+        if event.char and event.char.isdigit():
+            return None
+        if event.char:
+            return "break"
+        return None
+
+    entry.bind("<Key>", _filter_keys)
+
+    def _submit(_e=None):
+        pin = pin_var.get()
+        pin_var.set("")
+        if mb_auth.verify_pin(pin):
+            ok["value"] = True
+            gate.destroy()
+            return
+        tries["n"] += 1
+        left = 5 - tries["n"]
+        if left <= 0:
+            gate.destroy()
+            return
+        status.config(text=f"Denied ({left} left)")
+
+    entry.bind("<Return>", _submit)
+    tk.Button(
+        gate, text="Unlock", command=_submit, bg="#2a5a2a", fg=TEXT_COLOR,
+        font=("Consolas", 10), relief=tk.FLAT, cursor="hand2", padx=20, pady=6,
+    ).pack(pady=8)
+
+    def _on_close():
+        gate.destroy()
+
+    gate.protocol("WM_DELETE_WINDOW", _on_close)
+    entry.focus_set()
+    parent.wait_window(gate)
+    return bool(ok["value"])
+
+
 if __name__ == "__main__":
     root = tk.Tk()
+    root.withdraw()
+    if not _pin_gate(root):
+        root.destroy()
+        raise SystemExit(1)
+    root.deiconify()
     app = Workstation(root)
     root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()

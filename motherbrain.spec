@@ -31,6 +31,7 @@ hidden = [
     "core.flywheel",
     "core.devices",
     "core.isaac_sim",
+    "core.auth",
     "tools",
     "tools.system_agent",
 ]

@@ -9,6 +9,7 @@ never does.
 from __future__ import annotations
 
 import json
+import secrets
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -154,7 +155,12 @@ def load_config() -> dict[str, Any]:
         return ensure_config(overwrite=False)
     if not isinstance(data, dict):
         return ensure_config()
-    return _merge_defaults(data)
+    cfg = _merge_defaults(data)
+    sync_cfg = cfg.setdefault("sync", {})
+    if not (sync_cfg.get("token") or "").strip():
+        sync_cfg["token"] = secrets.token_hex(16)
+        save_config(cfg)
+    return cfg
 
 
 def save_config(cfg: dict[str, Any]) -> None:
@@ -179,6 +185,10 @@ def ensure_config(overwrite: bool = False) -> dict[str, Any]:
         cfg = _merge_defaults(existing)
     else:
         cfg = default_config()
+    # Always mint a sync token once so laptop/home share a shared secret.
+    sync_cfg = cfg.setdefault("sync", {})
+    if not (sync_cfg.get("token") or "").strip():
+        sync_cfg["token"] = secrets.token_hex(16)
     save_config(cfg)
     return cfg
 
