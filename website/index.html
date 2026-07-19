@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#030303">
+  <meta name="description" content="Occhialini — a local-first AI engineering companion for hardware, robotics, and simulation.">
+  <meta name="application-name" content="Occhialini">
+  <title>Occhialini — Local AI for Real-World Engineering</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <canvas id="starfield" aria-hidden="true"></canvas>
+  <div class="noise" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Occhialini home">
+      <img class="brand-mark" src="logo.svg" alt="">
+      <span>OCCHIALINI</span>
+    </a>
+    <nav aria-label="Primary navigation">
+      <a href="#mission">Mission</a>
+      <a href="#systems">Systems</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#docs">Initialize</a>
+    </nav>
+    <a class="header-status" href="#security"><i></i> Local / Secure</a>
+    <button class="menu-button" aria-label="Open menu" aria-expanded="false"><span></span><span></span></button>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero-grid" aria-hidden="true"></div>
+      <div class="hero-copy reveal">
+        <p class="eyebrow"><span>01</span> Personal intelligence infrastructure</p>
+        <h1 aria-label="Build beyond the cloud">
+          <span>BUILD</span>
+          <span>BEYOND</span>
+          <span>THE CLOUD</span>
+        </h1>
+        <p class="hero-lede">A local-first engineering intelligence for hardware, robotics, and ambitious machines. Your models. Your vault. Your network.</p>
+        <div class="hero-actions">
+          <a class="button button-light" href="#docs">Initialize system <span>↗</span></a>
+          <a class="button button-ghost" href="#architecture">Explore architecture <span>↓</span></a>
+        </div>
+        <dl class="hero-stats">
+          <div><dt>32B</dt><dd>Local parameters</dd></div>
+          <div><dt>0</dt><dd>Required cloud calls</dd></div>
+          <div><dt>∞</dt><dd>Projects remembered</dd></div>
+        </dl>
+      </div>
+
+      <div class="lunar-stage" aria-label="Animated ASCII moon">
+        <div class="orbit orbit-one"></div>
+        <div class="orbit orbit-two"></div>
+        <div class="moon-glow"></div>
+        <pre class="ascii-moon" aria-hidden="true"></pre>
+        <div class="moon-crosshair" aria-hidden="true"><span></span><span></span></div>
+        <div class="moon-label moon-label-top"><b>LUNAR NODE</b><span>MB–01 / ONLINE</span></div>
+        <div class="moon-label moon-label-bottom"><b>LOCAL INFERENCE</b><span>127.0.0.1:8081</span></div>
+      </div>
+
+      <div class="hero-side-note">
+        <span>SYS / OC.2026</span>
+        <p>Named for Giuseppe “Beppo” Occhialini, the physicist who helped reveal the hidden particles of the cosmos.</p>
+      </div>
+      <a class="scroll-cue" href="#mission"><span></span> Scroll to transmit</a>
+    </section>
+
+    <section class="manifesto section-pad" id="mission">
+      <div class="section-index reveal"><span>02</span><p>The mission</p></div>
+      <div class="manifesto-copy reveal">
+        <p class="kicker">In the spirit of physicist Giuseppe Occhialini: reveal what others cannot see.</p>
+        <h2>YOUR ENGINEERING<br>MEMORY, <em>IN ORBIT.</em></h2>
+        <div class="split-copy">
+          <p>Occhialini turns your own computers into persistent engineering infrastructure. It understands project manifests, hardware devices, firmware, CAD, datasets, simulation state, and every decision that brought your build to life.</p>
+          <p>No subscription. No remote memory. No proprietary design sent to an unknown server. The system runs locally, syncs privately, and learns from the work you choose to preserve.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="capabilities section-pad" id="systems">
+      <div class="section-heading reveal">
+        <p class="eyebrow"><span>03</span> Capabilities</p>
+        <h2>ONE SYSTEM.<br>EIGHT CORE MODULES.</h2>
+        <p>Everything required to operate a private, project-aware engineering companion across your machines.</p>
+      </div>
+      <div class="capability-grid">
+        <article class="capability-card reveal">
+          <span class="card-code">INF / 01</span><div class="line-icon icon-core"></div>
+          <h3>Local 32B Intelligence</h3>
+          <p>Run Qwen2.5-Coder GGUF through llama.cpp and CUDA, tuned for partial offload on 8GB-class GPUs.</p>
+          <ul><li>Offline inference</li><li>Local or remote routing</li><li>Model health telemetry</li></ul>
+        </article>
+        <article class="capability-card reveal">
+          <span class="card-code">CTX / 02</span><div class="line-icon icon-orbit"></div>
+          <h3>Project-Aware Chat</h3>
+          <p>Every answer can include your active project's devices, adapters, datasets, status, and key engineering files.</p>
+          <ul><li>Persistent chat history</li><li>Manifest context</li><li>Hardware-aware prompts</li></ul>
+        </article>
+        <article class="capability-card reveal">
+          <span class="card-code">VLT / 03</span><div class="line-icon icon-vault"></div>
+          <h3>Private Vault</h3>
+          <p>Projects, conversations, training sets, and adapters live under a vault you control, indexed with SQLite FTS.</p>
+          <ul><li>Full-text search</li><li>JSON manifests</li><li>Conflict preservation</li></ul>
+        </article>
+        <article class="capability-card reveal">
+          <span class="card-code">SYN / 04</span><div class="line-icon icon-sync"></div>
+          <h3>Two-Way Sync</h3>
+          <p>Synchronize home and laptop over WireGuard using hashes, modification times, and authenticated HTTP.</p>
+          <ul><li>SHA-256 inventory</li><li>Bearer tokens</li><li>No silent overwrites</li></ul>
+        </article>
+        <article class="capability-card reveal">
+          <span class="card-code">SIM / 05</span><div class="line-icon icon-sim"></div>
+          <h3>Isaac Sim Bridge</h3>
+          <p>Inspect USD scenes, control timelines, and send articulation targets to NVIDIA Isaac Sim from Occhialini.</p>
+          <ul><li>TCP JSON protocol</li><li>ROS 2 option</li><li>AI-callable tools</li></ul>
+        </article>
+        <article class="capability-card reveal">
+          <span class="card-code">FLY / 06</span><div class="line-icon icon-loop"></div>
+          <h3>Training Flywheel</h3>
+          <p>Curate useful conversations, export project-aware JSONL, and fine-tune LoRA adapters with Unsloth.</p>
+          <ul><li>Conversation pairing</li><li>Selective curation</li><li>Project-bound adapters</li></ul>
+        </article>
+        <article class="capability-card reveal">
+          <span class="card-code">WEB / 07</span><div class="line-icon icon-phone"></div>
+          <h3>Phone Companion</h3>
+          <p>Reach your engineering brain through a hardened, token-authenticated HTTPS interface over your VPN.</p>
+          <ul><li>WireGuard-only bind</li><li>Rate limiting</li><li>Secure headers</li></ul>
+        </article>
+        <article class="capability-card reveal">
+          <span class="card-code">SYS / 08</span><div class="line-icon icon-terminal"></div>
+          <h3>Integrated Workstation</h3>
+          <p>A sharp Windows desktop app with model management, WSL terminal, projects, datasets, hardware, and sync.</p>
+          <ul><li>Single-file EXE</li><li>PIN gate</li><li>Interactive WSL</li></ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="workstation section-pad">
+      <div class="section-heading reveal">
+        <p class="eyebrow"><span>04</span> Command center</p>
+        <h2>THE WORKSTATION</h2>
+      </div>
+      <div class="workstation-window reveal">
+        <div class="window-bar">
+          <div><i></i><i></i><i></i></div>
+          <span>OCCHIALINI WORKSTATION / NODE 01</span>
+          <span class="online">● AI READY</span>
+        </div>
+        <div class="window-body">
+          <aside>
+            <b>◆ NAVIGATION</b>
+            <a class="active">AI Chat</a><a>Project Editor</a><a>Training Console</a><a>Dashboard</a><a>Model Manager</a><a>Vault Explorer</a><a>Isaac Sim</a><a>Vault Sync</a>
+            <small>◆ ACTIVE PROJECT</small><strong>ORBITAL ROVER</strong>
+          </aside>
+          <div class="terminal-demo">
+            <div class="terminal-meta"><span>CHAT / ORBITAL-ROVER</span><span>QWEN 32B · LOCAL</span></div>
+            <div class="chat-line user"><b>YOU</b><p>Check the ESP32 telemetry design and tell me what is missing before the next field test.</p></div>
+            <div class="chat-line ai"><b>OCCHIALINI</b><p>I found three risks in the active project: the battery ADC lacks calibration, the radio retry loop has no exponential backoff, and the enclosure manifest lists no thermal vent path. I can inspect the firmware next.</p></div>
+            <div class="tool-line"><span>&gt; PROJECT CONTEXT INJECTED</span><span>7 DEVICES · 12 FILES · 2 DATASETS</span></div>
+            <div class="prompt-line"><span>Ask Occhialini...</span><i></i></div>
+          </div>
+          <div class="wsl-demo">
+            <b>◆ WSL TERMINAL</b>
+            <p><span>umer@motherbrain:~$</span> python shell/main.py dashboard</p>
+            <p>Projects indexed: 12<br>Messages logged: 4,208<br>Curated pairs: 184<br>Model status: READY</p>
+            <p><span>umer@motherbrain:~$</span> <i class="cursor"></i></p>
+          </div>
+        </div>
+      </div>
+      <div class="module-strip reveal">
+        <span>AI CHAT</span><span>PROJECTS</span><span>TRAINING</span><span>MODELS</span><span>VAULT</span><span>HARDWARE</span><span>ISAAC SIM</span><span>SYNC</span><span>SETTINGS</span>
+      </div>
+    </section>
+
+    <section class="architecture section-pad" id="architecture">
+      <div class="section-heading reveal">
+        <p class="eyebrow"><span>05</span> Private constellation</p>
+        <h2>YOUR MACHINES.<br>ONE MEMORY.</h2>
+        <p>A hybrid topology keeps compute near the GPU, context near the work, and every connection inside your private network.</p>
+      </div>
+      <div class="architecture-map reveal">
+        <svg class="connection-lines" viewBox="0 0 1200 600" preserveAspectRatio="none" aria-hidden="true">
+          <path class="path path-a" d="M260,290 C410,80 740,80 900,290"/>
+          <path class="path path-b" d="M260,310 C430,520 760,520 900,310"/>
+          <path class="path path-c" d="M920,340 C930,430 860,500 760,520"/>
+        </svg>
+        <article class="node node-laptop"><span>EDGE NODE / 01</span><div class="node-icon">▰</div><h3>LAPTOP</h3><p>Motherbrain.exe<br>Local 32B inference<br>Engineering workstation</p><b>192.168.x.x</b></article>
+        <div class="network-core"><div class="core-ring"></div><span>WIREGUARD</span><b>PRIVATE ORBIT</b><small>ENCRYPTED TUNNEL</small></div>
+        <article class="node node-home"><span>CORE NODE / 02</span><div class="node-icon">▥</div><h3>HOME PC</h3><p>Vault authority<br>Heavy GPU inference<br>Sync server :8090</p><b>10.0.0.1</b></article>
+        <article class="node node-phone"><span>REMOTE / 03</span><div class="node-icon">▯</div><h3>PHONE</h3><p>HTTPS companion<br>Token authenticated</p><b>:8443</b></article>
+        <div class="route-label route-a">VAULT SYNC / HTTP 8090</div>
+        <div class="route-label route-b">REMOTE INFERENCE / 8081</div>
+      </div>
+    </section>
+
+    <section class="simulation section-pad" id="simulation">
+      <div class="sim-visual reveal">
+        <div class="planet-rings"></div>
+        <div class="wire-planet"><span></span></div>
+        <div class="sim-coordinates">X 0.0042<br>Y 1.8830<br>Z −0.1420</div>
+      </div>
+      <div class="sim-copy reveal">
+        <p class="eyebrow"><span>06</span> Simulation link</p>
+        <h2>THINK.<br>SIMULATE.<br><em>ACT.</em></h2>
+        <p>Occhialini does more than discuss robots. Its lightweight bridge connects the companion directly to NVIDIA Isaac Sim.</p>
+        <div class="protocol">
+          <div><span>POST / motherbrain.isaac.v1</span><button class="copy-button" data-copy='{"method":"set_joint_targets","params":{"robot_prim":"/World/Robot","targets":{"shoulder":0.45}}}'>COPY</button></div>
+          <pre><code>{
+  "method": "set_joint_targets",
+  "params": {
+    "robot_prim": "/World/Robot",
+    "targets": { "shoulder": 0.45 }
+  }
+}</code></pre>
+        </div>
+        <ul class="method-list"><li>Inspect USD stages</li><li>Play / pause / reset</li><li>Drive articulations</li><li>Optional ROS 2 telemetry</li></ul>
+      </div>
+    </section>
+
+    <section class="security section-pad" id="security">
+      <div class="security-copy reveal">
+        <p class="eyebrow"><span>07</span> Zero-cloud posture</p>
+        <h2>BUILT LIKE<br>A PRIVATE<br><em>MISSION.</em></h2>
+        <p>Your designs are not training material for someone else's model. Occhialini keeps prompts, files, chats, and training data on hardware you control.</p>
+        <div class="security-facts">
+          <div><b>PIN GATE</b><span>Masked · digits only · constant-time verification</span></div>
+          <div><b>VAULT AUTH</b><span>Generated bearer token · protected fields</span></div>
+          <div><b>VPN ONLY</b><span>WireGuard private routes · no public bind</span></div>
+          <div><b>WEB HARDENING</b><span>TLS · CSP · rate limits · tools off</span></div>
+        </div>
+      </div>
+      <div class="security-vault reveal">
+        <div class="vault-orbits"><i></i><i></i><i></i></div>
+        <div class="vault-center"><span>◆</span><b>LOCAL</b><small>TRUST BOUNDARY</small></div>
+        <p>NO CLOUD REQUIRED</p>
+      </div>
+    </section>
+
+    <section class="flywheel section-pad">
+      <div class="section-heading reveal">
+        <p class="eyebrow"><span>08</span> Personal learning loop</p>
+        <h2>THE SYSTEM LEARNS<br>WHAT YOU CHOOSE.</h2>
+      </div>
+      <ol class="flywheel-track">
+        <li class="reveal"><span>01</span><div>CHAT</div><p>Work with project context</p></li>
+        <li class="reveal"><span>02</span><div>MARK</div><p>Curate useful exchanges</p></li>
+        <li class="reveal"><span>03</span><div>EXPORT</div><p>Create clean JSONL pairs</p></li>
+        <li class="reveal"><span>04</span><div>FINE-TUNE</div><p>Train a LoRA adapter</p></li>
+        <li class="reveal"><span>05</span><div>BIND</div><p>Attach intelligence to project</p></li>
+      </ol>
+    </section>
+
+    <section class="docs section-pad" id="docs">
+      <div class="section-heading reveal">
+        <p class="eyebrow"><span>09</span> Launch sequence</p>
+        <h2>INITIALIZE YOUR<br>PRIVATE NETWORK.</h2>
+        <p>Two machines, one token, one engineering memory.</p>
+      </div>
+      <div class="setup-grid">
+        <article class="setup-panel reveal">
+          <header><span>CORE NODE</span><b>HOME PC</b></header>
+          <ol><li><b>01</b><div>Clone the repository<pre><code>git clone https://github.com/muhammadmaalik/Engineering-Database.git motherbrain
+cd motherbrain</code></pre></div></li>
+            <li><b>02</b><div>Build the workstation<pre><code>powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1</code></pre></div></li>
+            <li><b>03</b><div>Open <code>dist\Motherbrain.exe</code>, choose <strong>Vault Sync</strong>, set role to <code>home</code>, save, and start the sync server.</div></li>
+            <li><b>04</b><div>Copy the generated sync token and note the home PC's WireGuard or LAN IP.</div></li></ol>
+        </article>
+        <article class="setup-panel reveal">
+          <header><span>EDGE NODE</span><b>LAPTOP</b></header>
+          <ol><li><b>01</b><div>Open the latest <code>dist\Motherbrain.exe</code> and unlock the workstation.</div></li>
+            <li><b>02</b><div>In <strong>Vault Sync</strong>, set role to <code>laptop</code> and use:<pre><code>http://&lt;HOME_IP&gt;:8090</code></pre></div></li>
+            <li><b>03</b><div>Enter the same sync token, save, then run <strong>Test</strong>.</div></li>
+            <li><b>04</b><div>Select <strong>Sync Now</strong>. Projects, chats, datasets, adapters, and exports enter orbit.</div></li></ol>
+        </article>
+      </div>
+      <div class="sync-note reveal"><span>IMPORTANT</span><p>Large GGUF model files are intentionally excluded from sync. Install models independently on each inference machine.</p></div>
+    </section>
+
+    <section class="stack section-pad">
+      <p class="eyebrow reveal"><span>10</span> Flight hardware</p>
+      <div class="stack-marquee" aria-label="Technology stack"><div>
+        <span>PYTHON 3.12</span><i>◆</i><span>C++20</span><i>◆</i><span>LLAMA.CPP</span><i>◆</i><span>CUDA</span><i>◆</i><span>SQLITE FTS5</span><i>◆</i><span>WIREGUARD</span><i>◆</i><span>ISAAC SIM</span><i>◆</i><span>ROS 2</span><i>◆</i><span>UNSLOTH</span><i>◆</i>
+      </div></div>
+    </section>
+
+    <section class="faq section-pad">
+      <div class="section-heading reveal">
+        <p class="eyebrow"><span>11</span> Mission briefing</p>
+        <h2>COMMON SIGNALS.</h2>
+      </div>
+      <div class="faq-list">
+        <details class="reveal"><summary>Does Occhialini send my data to the cloud?<span>+</span></summary><p>No. Inference, vault storage, chat history, and training data stay on your machines. Private remote access is designed around WireGuard.</p></details>
+        <details class="reveal"><summary>What GPU do I need?<span>+</span></summary><p>The current defaults target an 8GB-class NVIDIA laptop GPU using partial CUDA offload for a quantized 32B model. Smaller models can run on more modest hardware; a larger home GPU improves speed.</p></details>
+        <details class="reveal"><summary>Can it work completely offline?<span>+</span></summary><p>Yes. Once your model and dependencies are installed, local inference and the desktop vault do not need an internet connection.</p></details>
+        <details class="reveal"><summary>Can I use my own GGUF model?<span>+</span></summary><p>Yes. The model manager and configuration support selecting local GGUF files served through llama.cpp.</p></details>
+        <details class="reveal"><summary>What happens during a sync conflict?<span>+</span></summary><p>Occhialini does not silently discard either copy. Near-equal timestamp conflicts are preserved as timestamped conflict files for review.</p></details>
+        <details class="reveal"><summary>How does Isaac Sim connect?<span>+</span></summary><p>A small Python bridge inside Isaac Sim exposes a versioned local TCP JSON-line protocol. Occhialini can inspect scenes, control simulation time, and set joint targets.</p></details>
+      </div>
+    </section>
+
+    <section class="final-cta">
+      <div class="final-moon" aria-hidden="true"></div>
+      <div class="reveal">
+        <p class="eyebrow"><span>12</span> Begin transmission</p>
+        <h2>BUILD A BRAIN<br>FOR THE THINGS<br>YOU BUILD.</h2>
+        <p>Private intelligence. Persistent engineering memory. Your hardware, in your orbit.</p>
+        <a class="button button-light" href="#docs">Start the launch sequence <span>↗</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <a class="brand" href="#top"><img class="brand-mark" src="logo.svg" alt=""><span>OCCHIALINI</span></a>
+    <p>LOCAL-FIRST ENGINEERING INTELLIGENCE<br>NO CLOUD REQUIRED.</p>
+    <div><a href="#systems">Systems</a><a href="#architecture">Architecture</a><a href="#docs">Initialize</a><a href="https://github.com/muhammadmaalik/Engineering-Database">GitHub ↗</a></div>
+    <small>© 2026 OCCHIALINI / BUILT FOR EARTH AND BEYOND</small>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
