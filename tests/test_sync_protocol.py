@@ -91,3 +91,12 @@ def test_deletion_tombstones_are_detected_and_applied(tmp_path, monkeypatch):
     deleted = sync.apply_tombstones(tombstones, remote)
     assert deleted == ["projects/demo/manifest.json"]
     assert not remote_file.exists()
+
+
+def test_sync_rate_limit_rejects_excess_requests(monkeypatch):
+    ticks = iter((0.0, 0.1, 0.2))
+    monkeypatch.setattr(sync_server.time, "monotonic", lambda: next(ticks))
+    sync_server._RATE_BUCKETS.clear()
+    assert sync_server._rate_ok("127.0.0.1", limit=2, window=60)
+    assert sync_server._rate_ok("127.0.0.1", limit=2, window=60)
+    assert not sync_server._rate_ok("127.0.0.1", limit=2, window=60)

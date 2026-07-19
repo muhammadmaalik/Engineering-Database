@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -56,6 +57,20 @@ from core.sync import (  # noqa: E402
 
 HOST = "0.0.0.0"
 PORT = 8090
+_RATE_LOCK = threading.Lock()
+_RATE_BUCKETS: dict[str, list[float]] = {}
+
+
+def _rate_ok(address: str, *, limit: int = 120, window: float = 60.0) -> bool:
+    now = time.monotonic()
+    with _RATE_LOCK:
+        recent = [seen for seen in _RATE_BUCKETS.get(address, []) if now - seen < window]
+        if len(recent) >= limit:
+            _RATE_BUCKETS[address] = recent
+            return False
+        recent.append(now)
+        _RATE_BUCKETS[address] = recent
+        return True
 
 
 def _auth_ok(handler: BaseHTTPRequestHandler) -> bool:
@@ -261,6 +276,9 @@ class SyncHandler(BaseHTTPRequestHandler):
         sys.stderr.write(f"[sync] {self.address_string()} - {fmt % args}\n")
 
     def do_GET(self) -> None:  # noqa: N802
+        if not _rate_ok(self.client_address[0]):
+            _json_response(self, 429, {"error": "rate limit exceeded"})
+            return
         parsed = urlparse(self.path)
         if parsed.path.rstrip("/") == "/health":
             _json_response(
@@ -327,6 +345,9 @@ class SyncHandler(BaseHTTPRequestHandler):
         _json_response(self, 404, {"error": "not found"})
 
     def do_PUT(self) -> None:  # noqa: N802
+        if not _rate_ok(self.client_address[0]):
+            _json_response(self, 429, {"error": "rate limit exceeded"})
+            return
         parsed = urlparse(self.path)
         try:
             data = _read_body(self, MAX_FILE_BYTES)
@@ -365,6 +386,12 @@ class SyncHandler(BaseHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def do_POST(self) -> None:  # noqa: N802
+        if not _rate_ok(
+            self.client_address[0],
+            limit=20 if self.path.startswith("/v2/pair/") else 120,
+        ):
+            _json_response(self, 429, {"error": "rate limit exceeded"})
+            return
         parsed = urlparse(self.path)
         try:
             raw = _read_body(self)
