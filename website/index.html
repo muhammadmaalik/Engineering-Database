@@ -137,7 +137,7 @@
           <span class="card-code">SYS / 08</span><div class="line-icon icon-terminal"></div>
           <h3>Integrated Workstation</h3>
           <p>Choose the established classic workstation or the separate modern liquid-glass desktop over the same local core.</p>
-          <ul><li>Two signed EXE targets</li><li>PIN gate</li><li>Shared private vault</li></ul>
+          <ul><li>Two branded EXE targets</li><li>PIN gate</li><li>Shared private vault</li></ul>
         </article>
       </div>
     </section>
@@ -318,7 +318,7 @@ cd motherbrain</code></pre></div></li>
       </div>
       <div class="faq-list">
         <details class="reveal"><summary>Does Occhialini send my data to the cloud?<span>+</span></summary><p>No. Inference, vault storage, chat history, and training data stay on your machines. Private remote access is designed around WireGuard.</p></details>
-        <details class="reveal"><summary>What GPU do I need?<span>+</span></summary><p>The current defaults target an 8GB-class NVIDIA laptop GPU using partial CUDA offload for a quantized 32B model. Smaller models can run on more modest hardware; a larger home GPU improves speed.</p></details>
+        <details class="reveal"><summary>What GPU do I need?<span>+</span></summary><p>No model is installed automatically. The catalog gives hardware-fit guidance; smaller GGUF models can use CPU or modest GPUs, while larger models benefit from partial offload and more RAM/VRAM.</p></details>
         <details class="reveal"><summary>Can it work completely offline?<span>+</span></summary><p>Yes. Once your model and dependencies are installed, local inference and the desktop vault do not need an internet connection.</p></details>
         <details class="reveal"><summary>Can I use my own GGUF model?<span>+</span></summary><p>Yes. The model manager and configuration support selecting local GGUF files served through llama.cpp.</p></details>
         <details class="reveal"><summary>What happens during a sync conflict?<span>+</span></summary><p>Occhialini does not silently discard either copy. Near-equal timestamp conflicts are preserved as timestamped conflict files for review.</p></details>
