@@ -30,11 +30,15 @@ from core import context as mb_context
 from core import tools as mb_tools
 from core import inference as mb_inference
 from core import models as mb_models
+from core import model_catalog as mb_model_catalog
+from core import model_download as mb_model_download
 from core import sync as mb_sync
+from core import sync_service as mb_sync_service
 from core import vault_index as mb_vault
 from core import flywheel as mb_flywheel
 from core import isaac_sim as mb_isaac
 from core import auth as mb_auth
+
 
 # ─── Paths (from companion core) ─────────────────────────────
 mb_paths.ensure_dirs()
@@ -61,6 +65,10 @@ class Workstation:
     def __init__(self, root):
         self.root = root
         self.root.title("Motherbrain Workstation v2.1")
+        try:
+            self.root.iconbitmap(str(mb_paths.bundle_dir() / "assets" / "occhialini.ico"))
+        except Exception:
+            pass
         self.root.geometry("1500x900")
         self.root.configure(bg=BG)
         self.root.minsize(1100, 600)
@@ -82,6 +90,7 @@ class Workstation:
         self.wsl_proc = None
         self._wsl_available = None
         self._term_line_buf = ""
+
         
         # Start UI poller
         self._poll_ui_queue()
@@ -234,7 +243,8 @@ class Workstation:
             self.project_combo["values"] = names
             self.project_combo.set(self.current_project_name if self.current_project else "None")
             db.close()
-        except: pass
+        except Exception as e:
+            pass
     
     def on_project_select(self, event):
         val = self.project_combo.get()
@@ -258,7 +268,7 @@ class Workstation:
             out = (r.stdout or b"") + (r.stderr or b"")
             text = out.decode("utf-16-le", errors="ignore") or out.decode("utf-8", errors="ignore")
             self._wsl_available = r.returncode == 0 and ("Ubuntu" in text or "VERSION" in text.upper() or "NAME" in text.upper())
-        except Exception:
+        except Exception as e:
             self._wsl_available = False
         return self._wsl_available
 
@@ -319,9 +329,20 @@ class Workstation:
             self.ui_call(self._term_append_output, f"\n[WSL read error: {e}]\n")
 
     def _term_append_output(self, text: str):
+        # Preserve unfinished user input — WSL output used to move current_cmd_start
+        # past typed text, so Enter sent empty lines (terminal looked "broken").
+        pending = ""
+        try:
+            if self.terminal_text.compare(self.current_cmd_start, "<", "end-1c"):
+                pending = self.terminal_text.get(self.current_cmd_start, "end-1c")
+                self.terminal_text.delete(self.current_cmd_start, "end")
+        except Exception:
+            pending = ""
         self.terminal_text.insert(tk.END, text, "output")
-        self.terminal_text.see(tk.END)
         self.current_cmd_start = self.terminal_text.index("end-1c")
+        if pending:
+            self.terminal_text.insert(tk.END, pending)
+        self.terminal_text.see(tk.END)
 
     def terminal_prompt(self):
         """Fallback prompt when WSL is unavailable."""
@@ -436,6 +457,10 @@ class Workstation:
     def start_ai_server(self):
         self.ui_call(self.top_status.config, {"text": "● Starting...", "fg": WARN})
         try:
+            cfg = mb_paths.load_config()
+            inf = cfg.get("inference") or {}
+            model_path = mb_paths.active_model_path(cfg)
+            llama_bin = mb_paths.resolve_llama_server()
             # External server already up (common when llama-server was started outside the app).
             if mb_inference.is_ready(timeout=2.0):
                 self._mark_ai_ready()
@@ -468,8 +493,9 @@ class Workstation:
     def refresh_sync_status(self):
         cfg = mb_paths.load_config()
         url = mb_paths.sync_server_url(cfg)
+        sync_cfg = cfg.get("sync") or {}
         try:
-            client = mb_sync.SyncClient()
+            client = mb_sync.SyncClient(timeout=5.0)
             health = client.health()
             msg = f"● Sync OK ({url})"
             color = AI_COLOR
@@ -876,8 +902,16 @@ class Workstation:
     def delete_project(self):
         if not self.current_project: return
         if messagebox.askyesno("Delete", f"Delete {self.current_project}?"):
-            (PROJECTS_DIR/self.current_project/"manifest.json").unlink(missing_ok=True)
-            self.current_project = None; self.refresh_project_list(); self.show_dashboard()
+            pid = self.current_project
+            try:
+                mb_vault.delete_project(pid, remove_files=True)
+            except Exception as e:
+                messagebox.showerror("Delete", f"Failed to delete project: {e}")
+                return
+            self.current_project = None
+            self.current_project_name = "None"
+            self.refresh_project_list()
+            self.show_dashboard()
     
     # ═══════════════════════════════════════════════════════════
     # TRAINING CONSOLE
@@ -948,6 +982,16 @@ class Workstation:
     def show_model_manager(self):
         self.clear_work(); self.set_bottom("Models")
         tk.Label(self.work_frame, text="📦 Model Manager", fg=AI_COLOR, bg=BG, font=("Segoe UI", 16, "bold")).pack(anchor="w", padx=20, pady=(20,10))
+        if not mb_paths.load_config().get("models", {}).get("onboarding_completed"):
+            tk.Label(
+                self.work_frame,
+                text=(
+                    "First run: import a local GGUF or choose a reviewed download. "
+                    "Occhialini Engineer and Occhialini Robotics are coming soon; no model is downloaded automatically."
+                ),
+                fg=WARN, bg=CHAT_BG, font=("Segoe UI", 9), justify=tk.LEFT,
+                anchor="w", wraplength=1000, padx=12, pady=9,
+            ).pack(fill=tk.X, padx=20, pady=(0, 8))
 
         active = mb_models.get_active_model()
         active_lbl = tk.Label(
@@ -974,77 +1018,140 @@ class Workstation:
             self.model_listbox.insert(tk.END, f"{name}  ({size_s})  [{src}]{marker}")
 
         btn_f = tk.Frame(self.work_frame, bg=BG); btn_f.pack(fill=tk.X, padx=20, pady=10)
-        tk.Button(btn_f, text="Set Active", command=self._models_set_active, bg=USER_COLOR, fg="white",
+        tk.Button(btn_f, text="Activate + Restart", command=self._models_set_active, bg=USER_COLOR, fg="white",
                  font=("Segoe UI", 9), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.LEFT, padx=3)
-        tk.Button(btn_f, text="Download / Set Qwen 32B", command=lambda: threading.Thread(target=self._models_download_qwen32b, daemon=True).start(),
+        tk.Button(btn_f, text="Download Qwen 32B", command=lambda: threading.Thread(target=self._models_download_qwen32b, daemon=True).start(),
                  bg=AI_COLOR, fg=BG, font=("Segoe UI", 9, "bold"), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.LEFT, padx=3)
-        tk.Button(btn_f, text="Apply Gemma 9B preset", command=self._models_apply_gemma, bg="#444", fg=TEXT_COLOR,
+        tk.Button(btn_f, text="Cancel Download", command=self._models_cancel_download, bg="#444", fg=TEXT_COLOR,
                  font=("Segoe UI", 9), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.LEFT, padx=3)
-        tk.Button(btn_f, text="⚡ Start AI", command=lambda: threading.Thread(target=self.start_ai_server, daemon=True).start(),
-                 bg="#2a5a2a", fg=TEXT_COLOR, font=("Segoe UI", 9), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.LEFT, padx=3)
+        tk.Button(btn_f, text="Import GGUF", command=self._models_import_local, bg="#444", fg=TEXT_COLOR,
+                 font=("Segoe UI", 9), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.LEFT, padx=3)
+        tk.Button(btn_f, text="Repair", command=self._models_repair, bg="#444", fg=TEXT_COLOR,
+                 font=("Segoe UI", 9), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.LEFT, padx=3)
+        tk.Button(btn_f, text="Remove", command=self._models_remove, bg="#6a3030", fg=TEXT_COLOR,
+                 font=("Segoe UI", 9), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.LEFT, padx=3)
         tk.Button(btn_f, text="Refresh", command=self.show_model_manager, bg="#444", fg=TEXT_COLOR,
                  font=("Segoe UI", 9), relief=tk.FLAT, cursor="hand2", padx=12, pady=6).pack(side=tk.RIGHT, padx=3)
 
         self.model_status = tk.Label(self.work_frame, text="", fg=DIM, bg=BG, font=("Consolas", 9), anchor="w")
         self.model_status.pack(fill=tk.X, padx=20, pady=(0, 10))
 
-    def _models_selected_filename(self):
+    def _models_selected_entry(self):
         sel = self.model_listbox.curselection()
         if not sel:
             return None
-        entry = self._model_entries[sel[0]]
-        return entry.get("filename") or Path(entry.get("file_path") or entry.get("path") or "").name
+        return self._model_entries[sel[0]]
 
     def _models_set_active(self):
-        name = self._models_selected_filename()
-        if not name:
+        entry = self._models_selected_entry()
+        if not entry:
             messagebox.showwarning("Models", "Select a model first."); return
-        mb_models.set_active_model(name)
-        self.set_bottom(f"Active model: {name}")
-        self.show_model_manager()
+        model_path = entry.get("file_path") or entry.get("path") or entry.get("filename")
 
-    def _models_apply_gemma(self):
+        def activate():
+            try:
+                self.set_bottom("Stopping old server and activating selected model...")
+                result = mb_inference.activate_model(model_path, start=True)
+                self.set_bottom(f"Active model: {result.get('filename')}")
+                self.ui_call(self.show_model_manager)
+            except Exception as exc:
+                self.ui_call(messagebox.showerror, "Activate model", str(exc))
+
+        threading.Thread(target=activate, daemon=True).start()
+
+    def _models_import_local(self):
+        selected = filedialog.askopenfilename(
+            title="Import a local GGUF",
+            filetypes=[("GGUF models", "*.gguf")],
+        )
+        if not selected:
+            return
         try:
-            mb_models.apply_preset("gemma-9b")
-            self.set_bottom("Applied Gemma 9B preset")
+            target = mb_model_download.import_local_gguf(selected)
+            self._models_finish_onboarding()
+            self.set_bottom(f"Imported {target.name}; activate it when ready.")
             self.show_model_manager()
-        except Exception as e:
-            messagebox.showerror("Preset", str(e))
+        except Exception as exc:
+            messagebox.showerror("Import model", str(exc))
+
+    def _models_repair(self):
+        entry = self._models_selected_entry()
+        if not entry or not entry.get("id") or entry.get("source") == "disk":
+            messagebox.showinfo("Repair", "This disk-only model has no registry record.")
+            return
+        try:
+            result = mb_model_download.repair_model(entry["id"])
+            self.set_bottom(f"Model check: {result['status']}")
+            self.show_model_manager()
+        except Exception as exc:
+            messagebox.showerror("Repair model", str(exc))
+
+    def _models_remove(self):
+        entry = self._models_selected_entry()
+        if not entry:
+            return
+        if not messagebox.askyesno("Remove model", "Remove this model and its local GGUF file?"):
+            return
+        try:
+            if entry.get("id") and entry.get("source") != "disk":
+                mb_model_download.remove_model(entry["id"], delete_file=True)
+            else:
+                Path(entry.get("path") or "").unlink()
+            self.show_model_manager()
+        except Exception as exc:
+            messagebox.showerror("Remove model", str(exc))
 
     def _models_download_qwen32b(self):
-        preset = mb_models.PRESETS["qwen-32b"]
-        self.ui_call(self.model_status.config, {"text": f"Downloading {preset['filename']} from {preset['repo']}..."})
-        self.set_bottom(f"Downloading {preset['filename']}...")
+        preset = mb_model_catalog.get_curated("qwen-32b")
+        self.ui_call(self.model_status.config, {"text": f"Resolving {preset.label} metadata..."})
+        self.set_bottom(f"Preparing {preset.label}...")
         try:
-            from huggingface_hub import hf_hub_download, list_repo_files
-            MODELS_DIR.mkdir(parents=True, exist_ok=True)
-            files = list_repo_files(preset["repo"])
-            ggufs = [f for f in files if f.endswith(".gguf") and preset["quant"] in f]
-            selected = ggufs[0] if ggufs else preset["filename"]
-            # Prefer exact filename match if present
-            for f in files:
-                if f.endswith(preset["filename"]) or Path(f).name == preset["filename"]:
-                    selected = f
-                    break
-            hf_hub_download(
-                repo_id=preset["repo"],
-                filename=selected,
-                local_dir=str(MODELS_DIR),
-                local_dir_use_symlinks=False,
+            repository = mb_model_catalog.list_gguf_files(preset.repo_id or "")
+            selected = next(
+                item for item in repository["files"]
+                if Path(item["filename"]).name == preset.filename
             )
-            mb_models.apply_preset("qwen-32b")
-            self.ui_call(self.model_status.config, {"text": f"Ready: {preset['filename']} set active."})
-            self.set_bottom(f"Qwen 32B ready: {preset['filename']}")
+            self._model_download_job = mb_model_download.DOWNLOADS.start(
+                repo_id=preset.repo_id or "",
+                filename=selected["filename"],
+                revision=repository["revision"],
+                expected_size=selected.get("size_bytes"),
+                expected_sha256=selected.get("sha256"),
+                metadata={
+                    "name": preset.label,
+                    "quantization": preset.quantization,
+                    "license": repository.get("license") or preset.license,
+                    "publisher": preset.publisher,
+                    "provenance": "curated",
+                },
+                progress=lambda done, total: self.ui_call(
+                    self.model_status.config,
+                    {"text": (
+                        f"Downloading {done * 100 / total:.1f}%"
+                        if total else f"Downloading {done / (1024**2):.1f} MB"
+                    )},
+                ),
+            )
+            self._model_download_job.thread.join()
+            if self._model_download_job.status != "completed":
+                raise RuntimeError(self._model_download_job.error or "Download did not complete")
+            self._models_finish_onboarding()
+            self.ui_call(self.model_status.config, {"text": f"Ready: {preset.filename}. Select it to activate."})
+            self.set_bottom(f"Downloaded {preset.label}")
             self.ui_call(self.show_model_manager)
-        except Exception as e:
-            # Still set preset so config points at the expected file
-            try:
-                mb_models.apply_preset("qwen-32b")
-            except Exception:
-                pass
-            self.ui_call(self.model_status.config, {"text": f"Download/set error: {e}"})
-            self.set_bottom(f"Qwen 32B: {e}")
-            self.ui_call(self.show_model_manager)
+        except Exception as exc:
+            self.ui_call(self.model_status.config, {"text": f"Download error: {exc}"})
+
+    def _models_cancel_download(self):
+        job = getattr(self, "_model_download_job", None)
+        if job and job.status in {"queued", "downloading"}:
+            job.cancel()
+            self.set_bottom("Cancelling model download; retry will resume.")
+
+    def _models_finish_onboarding(self):
+        cfg = mb_paths.load_config()
+        cfg.setdefault("models", {})["onboarding_completed"] = True
+        mb_paths.save_config(cfg)
     
     def show_vault_explorer(self):
         self.clear_work(); self.set_bottom("Vault")
@@ -1115,8 +1222,8 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
         ).pack(anchor="w", padx=20, pady=(20, 6))
         tk.Label(
             self.work_frame,
-            text="Home PC runs sync_server.py :8090. Laptop points sync URL at home (WireGuard/LAN).\n"
-                 "Both machines must use the same sync token.",
+            text="Pair devices with a two-minute connection key, then sync over LAN or WireGuard.\n"
+                 "Ed25519 signatures authenticate peers; WireGuard is still required for file confidentiality.",
             fg=DIM,
             bg=BG,
             font=("Consolas", 9),
@@ -1169,6 +1276,25 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
             bg="#2a5a2a", fg=TEXT_COLOR, font=("Segoe UI", 10, "bold"),
             relief=tk.FLAT, cursor="hand2", padx=16, pady=8,
         ).pack(side=tk.LEFT, padx=4)
+        tk.Button(
+            btn, text="Start Sync Server",
+            command=lambda: threading.Thread(target=self.start_sync_server, daemon=True).start(),
+            bg="#5a3a2a", fg=TEXT_COLOR, font=("Segoe UI", 10),
+            relief=tk.FLAT, cursor="hand2", padx=16, pady=8,
+        ).pack(side=tk.LEFT, padx=4)
+        peer_btn = tk.Frame(self.work_frame, bg=BG)
+        peer_btn.pack(anchor="w", padx=20, pady=(0, 8))
+        for label, command in [
+            ("Open Pairing Window", self._peer_open_pairing),
+            ("Join Connection Key", self._peer_join_pairing),
+            ("Check Pairing", self._peer_check_pairing),
+            ("Confirm 8-Digit Code", self._peer_confirm_pairing),
+            ("Revoke Peer", self._peer_revoke),
+        ]:
+            tk.Button(
+                peer_btn, text=label, command=command, bg="#35364a", fg=TEXT_COLOR,
+                font=("Segoe UI", 9), relief=tk.FLAT, cursor="hand2", padx=10, pady=6,
+            ).pack(side=tk.LEFT, padx=3)
 
         self.vault_sync_log = scrolledtext.ScrolledText(
             self.work_frame, bg=CHAT_BG, fg=TEXT_COLOR, font=("Consolas", 9),
@@ -1177,14 +1303,169 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
         self.vault_sync_log.pack(fill=tk.BOTH, expand=True, padx=20, pady=(4, 16))
         self.vault_sync_log.insert(
             tk.END,
-            "Home PC:\n  1) Set role=home, note the sync token\n"
-            "  2) python sync_server.py\n"
-            "  3) WireGuard IP e.g. 10.0.0.1\n\n"
-            "Laptop:\n  1) Set sync URL to http://<home-wg-ip>:8090\n"
-            "  2) Paste the SAME sync token\n"
-            "  3) Sync Now\n",
+            "Home PC: Start Sync Server → Open Pairing Window using its LAN/WireGuard URL.\n"
+            "Laptop: Join Connection Key. Compare the same 8-digit code on both screens.\n"
+            "Both: Confirm the code. Then the laptop can Sync Now.\n"
+            "Trusted peer keys stay outside the synchronized vault.\n\n",
         )
+        self._peer_log_status()
         threading.Thread(target=self.refresh_sync_status, daemon=True).start()
+
+    def _peer_log(self, message):
+        if hasattr(self, "vault_sync_log"):
+            self.vault_sync_log.insert(tk.END, f"{message}\n")
+            self.vault_sync_log.see(tk.END)
+
+    def _peer_log_status(self):
+        try:
+            from core.peer_auth import IdentityStore
+
+            store = IdentityStore()
+            identity = store.load_or_create_identity()
+            peers = store.list_trusted_peers()
+            self._peer_log(f"Device: {identity.name} ({identity.device_id[:12]})")
+            self._peer_log(
+                "Trusted peers: " + (
+                    ", ".join(f"{peer.name} ({peer.device_id[:12]})" for peer in peers.values())
+                    if peers else "none"
+                )
+            )
+        except Exception as exc:
+            self._peer_log(f"Peer identity error: {exc}")
+
+    def _peer_open_pairing(self):
+        advertised = self.vault_sync_vars["sync_url"].get().strip()
+
+        def run():
+            try:
+                context = mb_sync.open_pairing_window(advertised)
+                self._pair_context = context
+                self.ui_call(
+                    self._peer_log,
+                    f"\nConnection key (expires in 2 minutes):\n{context['connection_key']}\n",
+                )
+            except Exception as exc:
+                self.ui_call(messagebox.showerror, "Open pairing", str(exc))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _peer_join_pairing(self):
+        key = simpledialog.askstring("Join device", "Paste the connection key:")
+        if not key:
+            return
+
+        def run():
+            try:
+                context = mb_sync.join_pairing_window(key)
+                self._pair_context = context
+                self.ui_call(self._peer_log, f"\nVerification code: {context['sas']}\nConfirm it on BOTH devices.")
+            except Exception as exc:
+                self.ui_call(messagebox.showerror, "Join pairing", str(exc))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _peer_check_pairing(self):
+        context = getattr(self, "_pair_context", None)
+        if not context:
+            messagebox.showinfo("Pairing", "Open or join a pairing window first.")
+            return
+
+        def run():
+            try:
+                status = mb_sync.pairing_status(context)
+                self._pair_context = status
+                text = (
+                    f"Verification code: {status.get('sas') or 'waiting for other device'} | "
+                    f"host={status.get('host_confirmed')} guest={status.get('guest_confirmed')}"
+                )
+                self.ui_call(self._peer_log, text)
+            except Exception as exc:
+                self.ui_call(messagebox.showerror, "Pairing status", str(exc))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _peer_confirm_pairing(self):
+        context = getattr(self, "_pair_context", None)
+        if not context or not context.get("sas"):
+            messagebox.showinfo("Pairing", "Join/check the pairing window until a code appears.")
+            return
+        code = simpledialog.askstring("Confirm pairing", "Enter the matching 8-digit code:")
+        if not code:
+            return
+
+        def run():
+            try:
+                status = mb_sync.confirm_pairing_window(context, code)
+                self._pair_context = status
+                message = "Pairing complete and trusted." if status.get("complete") else "Confirmed here; waiting for the other device."
+                self.ui_call(self._peer_log, message)
+                self.ui_call(self._peer_log_status)
+            except Exception as exc:
+                self.ui_call(messagebox.showerror, "Confirm pairing", str(exc))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _peer_revoke(self):
+        try:
+            from core.peer_auth import IdentityStore
+
+            store = IdentityStore()
+            peers = store.list_trusted_peers()
+            if not peers:
+                messagebox.showinfo("Revoke peer", "No trusted peers.")
+                return
+            answer = simpledialog.askstring(
+                "Revoke peer",
+                "Enter peer ID:\n" + "\n".join(f"{peer.device_id} — {peer.name}" for peer in peers.values()),
+            )
+            if answer and store.revoke_peer(answer.strip()):
+                self._peer_log(f"Revoked peer {answer.strip()}.")
+                self._peer_log_status()
+        except Exception as exc:
+            messagebox.showerror("Revoke peer", str(exc))
+
+    def start_sync_server(self):
+        """Launch sync_server.py locally on :8090 (home PC)."""
+        try:
+            # If already healthy on localhost, done.
+            try:
+                h = mb_sync.SyncClient(server_url="http://127.0.0.1:8090", timeout=2.0).health()
+                msg = f"Sync server already running: {h}"
+                self.ui_queue.put(lambda: (
+                    self.vault_sync_log.insert(tk.END, f"\n{msg}\n") if hasattr(self, "vault_sync_log") else None
+                ))
+                self.set_bottom("Sync server already up on :8090")
+                return
+            except Exception:
+                pass
+
+            cfg = mb_paths.load_config()
+            sync_cfg = cfg.get("sync") or {}
+            result = mb_sync_service.start(
+                str(sync_cfg.get("listen_host") or "0.0.0.0"),
+                int(sync_cfg.get("port") or 8090),
+            )
+            # Point local config at this machine when role=home
+            if str(cfg.get("role", "")).lower() == "home":
+                cfg.setdefault("sync", {})["server_url"] = "http://127.0.0.1:8090"
+                mb_paths.save_config(cfg)
+                if hasattr(self, "vault_sync_vars"):
+                    self.ui_call(self.vault_sync_vars["sync_url"].set, "http://127.0.0.1:8090")
+
+            time.sleep(1.2)
+            health = mb_sync.SyncClient(server_url="http://127.0.0.1:8090", timeout=3.0).health()
+            self.set_bottom("Sync server started on :8090")
+            self.ui_queue.put(lambda: (
+                self.vault_sync_log.insert(tk.END, f"\nStarted embedded sync server {result} → {health}\n")
+                if hasattr(self, "vault_sync_log") else None
+            ))
+            self.refresh_sync_status()
+        except Exception as e:
+            self.set_bottom(f"Sync server start failed: {e}")
+            self.ui_queue.put(lambda: (
+                self.vault_sync_log.insert(tk.END, f"\nStart Sync Server failed: {e}\n")
+                if hasattr(self, "vault_sync_log") else None
+            ))
 
     def save_vault_sync(self):
         cfg = mb_paths.load_config()
@@ -1505,6 +1786,10 @@ ESP32 Firmware Template: motherbrain/firmware/esp32_template/
             mb_inference.stop_server()
         except Exception:
             pass
+        try:
+            mb_sync_service.stop()
+        except Exception:
+            pass
         self.root.destroy()
 
 
@@ -1596,10 +1881,13 @@ def _pin_gate(parent: tk.Tk) -> bool:
 if __name__ == "__main__":
     root = tk.Tk()
     root.withdraw()
-    if not _pin_gate(root):
+    skip_pin = os.environ.get("MOTHERBRAIN_SKIP_PIN", "").strip() in ("1", "true", "yes")
+    if not skip_pin and not _pin_gate(root):
         root.destroy()
         raise SystemExit(1)
     root.deiconify()
     app = Workstation(root)
     root.protocol("WM_DELETE_WINDOW", app.on_close)
+    if os.environ.get("MOTHERBRAIN_SMOKE", "").strip() in ("1", "true", "yes"):
+        root.after(1500, app.on_close)
     root.mainloop()

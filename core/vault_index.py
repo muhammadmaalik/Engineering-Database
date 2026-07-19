@@ -90,7 +90,17 @@ CREATE TABLE IF NOT EXISTS model_registry (
     size_bytes INTEGER,
     downloaded_at TEXT,
     base_model TEXT,
-    role TEXT DEFAULT 'general'
+    role TEXT DEFAULT 'general',
+    repo_id TEXT,
+    revision TEXT,
+    file_name TEXT,
+    sha256 TEXT,
+    license TEXT,
+    publisher TEXT,
+    provenance TEXT,
+    verified INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'ready',
+    metadata_json TEXT DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS curation (
@@ -139,9 +149,33 @@ def ensure_tables(db_path: Path | None = None) -> None:
             )
         except sqlite3.OperationalError:
             pass
+        _migrate_model_registry(db)
         db.commit()
     finally:
         db.close()
+
+
+def _migrate_model_registry(db: sqlite3.Connection) -> None:
+    """Add provenance/verification columns to registries created by older builds."""
+    existing = {
+        str(row[1])
+        for row in db.execute("PRAGMA table_info(model_registry)").fetchall()
+    }
+    additions = {
+        "repo_id": "TEXT",
+        "revision": "TEXT",
+        "file_name": "TEXT",
+        "sha256": "TEXT",
+        "license": "TEXT",
+        "publisher": "TEXT",
+        "provenance": "TEXT",
+        "verified": "INTEGER DEFAULT 0",
+        "status": "TEXT DEFAULT 'ready'",
+        "metadata_json": "TEXT DEFAULT '{}'",
+    }
+    for column, declaration in additions.items():
+        if column not in existing:
+            db.execute(f"ALTER TABLE model_registry ADD COLUMN {column} {declaration}")
 
 
 def _tags_str(tags: Any) -> str:
@@ -266,6 +300,32 @@ def upsert_project_from_manifest(
     finally:
         db.close()
     return project_id
+
+
+def delete_project(project_id: str, *, remove_files: bool = True, db_path: Path | None = None) -> None:
+    """Remove a project from SQLite (and optional FTS) and optionally delete its folder."""
+    if not project_id:
+        raise ValueError("project_id required")
+    ensure_tables(db_path)
+    db = get_db(db_path)
+    try:
+        db.execute("DELETE FROM devices WHERE project_id = ?", (project_id,))
+        db.execute("DELETE FROM models WHERE project_id = ?", (project_id,))
+        db.execute("DELETE FROM datasets WHERE project_id = ?", (project_id,))
+        try:
+            db.execute("DELETE FROM projects_fts WHERE id = ?", (project_id,))
+        except sqlite3.Error:
+            pass
+        db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        db.commit()
+    finally:
+        db.close()
+    if remove_files:
+        import shutil
+
+        pdir = paths.PROJECTS_DIR / project_id
+        if pdir.exists():
+            shutil.rmtree(pdir, ignore_errors=True)
 
 
 def index_manifest_file(manifest_path: Path | str, db_path: Path | None = None) -> str | None:

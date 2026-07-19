@@ -9,13 +9,13 @@ import sys
 import json
 from pathlib import Path
 from datetime import datetime
-from huggingface_hub import hf_hub_download, list_repo_files
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from core import paths  # noqa: E402
+from core import model_catalog, model_download, models, vault_index  # noqa: E402
 from core.flywheel import (  # noqa: E402
     export_jsonl,
     export_pairs_jsonl,
@@ -254,22 +254,7 @@ def mark_good_for_training():
 # ─── MODEL REGISTRY ───────────────────────────────────────────
 
 def init_model_registry():
-    db = get_db()
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS model_registry (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            source TEXT,
-            file_path TEXT NOT NULL,
-            quantization TEXT,
-            size_bytes INTEGER,
-            downloaded_at TEXT,
-            base_model TEXT,
-            role TEXT DEFAULT 'general'
-        )
-    """)
-    db.commit()
-    db.close()
+    vault_index.ensure_tables()
 
 
 def resolve_download_target(repo_or_preset, quantization=None):
@@ -277,16 +262,16 @@ def resolve_download_target(repo_or_preset, quantization=None):
     key = (repo_or_preset or "").strip().lower()
     if key in PRESETS:
         preset = PRESETS[key]
-        return preset["repo"], quantization or preset["quant"]
-    return repo_or_preset, quantization
+        return preset["repo"], quantization or preset["quant"], preset["filename"]
+    return repo_or_preset, quantization, None
 
 
 def model_download(repo_id, quantization=None):
-    """Download a GGUF model from Hugging Face (supports PRESETS shortcuts)."""
+    """Download an explicitly selected GGUF at an immutable revision."""
     init_model_registry()
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-    repo_id, quantization = resolve_download_target(repo_id, quantization)
+    repo_id, quantization, preset_filename = resolve_download_target(repo_id, quantization)
     if not repo_id:
         print("[SHELL] Usage: model download <repo|qwen-32b|gemma-9b> [quant]")
         return
@@ -294,23 +279,35 @@ def model_download(repo_id, quantization=None):
     print(f"[SHELL] Finding GGUF files in {repo_id}...")
 
     try:
-        files = list_repo_files(repo_id)
-        gguf_files = [f for f in files if f.endswith('.gguf')]
+        repository = model_catalog.list_gguf_files(repo_id)
+        revision = repository["revision"]
+        gguf_files = repository["files"]
 
         if not gguf_files:
             print(f"[SHELL] No GGUF files found in {repo_id}")
             return
 
         if quantization:
-            gguf_files = [f for f in gguf_files if quantization.upper() in f.upper()]
+            gguf_files = [
+                item for item in gguf_files
+                if quantization.upper() in item["filename"].upper()
+            ]
+        if preset_filename:
+            exact = [
+                item for item in gguf_files
+                if Path(item["filename"]).name == preset_filename
+            ]
+            if exact:
+                gguf_files = exact
 
         if not gguf_files:
             print(f"[SHELL] No GGUF files matching quantization '{quantization}'")
             return
 
         print(f"[SHELL] Found {len(gguf_files)} matching files:")
-        for i, f in enumerate(gguf_files):
-            print(f"  [{i}] {f}")
+        for i, item in enumerate(gguf_files):
+            size = item.get("size_bytes") or 0
+            print(f"  [{i}] {item['filename']} ({size / (1024**3):.2f} GB)")
 
         if len(gguf_files) == 1:
             choice = 0
@@ -318,43 +315,27 @@ def model_download(repo_id, quantization=None):
             choice = int(input(f"  Choose file [0-{len(gguf_files)-1}]: "))
 
         selected = gguf_files[choice]
-        filename = Path(selected).name
-        dest = MODELS_DIR / filename
+        print(f"[SHELL] Downloading exact revision {revision[:12]}...")
 
-        if dest.exists():
-            print(f"[SHELL] Model already exists: {dest}")
-        else:
-            print(f"[SHELL] Downloading {selected}...")
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=selected,
-                local_dir=str(MODELS_DIR),
-                local_dir_use_symlinks=False
-            )
-            print(f"[SHELL] Downloaded to {dest}")
+        def report(done, total):
+            if total:
+                print(f"\r[SHELL] {done * 100 / total:5.1f}%", end="", flush=True)
 
-        model_id = filename.replace('.gguf', '')
-        size_bytes = dest.stat().st_size if dest.exists() else 0
-        size_mb = size_bytes / (1024 * 1024)
-
-        db = get_db()
-        db.execute("""
-            INSERT OR REPLACE INTO model_registry (id, name, source, file_path, quantization, size_bytes, downloaded_at, base_model)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            model_id,
-            repo_id.split('/')[-1],
-            repo_id,
-            str(dest),
-            quantization or "unknown",
-            size_bytes,
-            datetime.now().isoformat(),
-            repo_id
-        ))
-        db.commit()
-        db.close()
-
-        print(f"[SHELL] Model registered: {model_id} ({size_mb:.1f} MB)")
+        dest = model_download.download_gguf(
+            repo_id=repo_id,
+            filename=selected["filename"],
+            revision=revision,
+            expected_size=selected.get("size_bytes"),
+            expected_sha256=selected.get("sha256"),
+            metadata={
+                "quantization": selected.get("quantization"),
+                "license": repository.get("license"),
+                "publisher": repository.get("publisher"),
+                "provenance": "curated" if preset_filename else "community",
+            },
+            progress=report,
+        )
+        print(f"\n[SHELL] Downloaded and registered: {dest}")
 
     except Exception as e:
         print(f"[SHELL] Error: {e}")
@@ -363,55 +344,45 @@ def model_download(repo_id, quantization=None):
 def model_list():
     """List all registered models."""
     init_model_registry()
-    db = get_db()
+    registry = models.list_registry()
 
-    models = db.execute("""
-        SELECT id, name, quantization, size_bytes, role, downloaded_at
-        FROM model_registry ORDER BY downloaded_at DESC
-    """).fetchall()
-
-    if not models:
+    if not registry:
         print("[SHELL] No models registered. Use 'model download <repo|qwen-32b>' to get one.")
         print(f"[SHELL] Presets: {', '.join(PRESETS)}")
-        db.close()
         return
 
     print("\n  Registered Models:")
-    print(f"  {'ID':<40} {'Quant':<10} {'Size':<10} {'Role'}")
-    print(f"  {'-'*40} {'-'*10} {'-'*10} {'-'*15}")
+    print(f"  {'ID':<24} {'Quant':<10} {'Size':<10} {'Status'}")
+    print(f"  {'-'*24} {'-'*10} {'-'*10} {'-'*15}")
 
-    for mid, name, quant, size, role, date in models:
-        size_mb = size / (1024 * 1024) if size else 0
-        print(f"  {mid:<40} {quant or '?':<10} {size_mb:>6.1f} MB  {role}")
+    for record in registry:
+        size_mb = (record.get("size_bytes") or 0) / (1024 * 1024)
+        print(
+            f"  {record['id']:<24} {record.get('quantization') or '?':<10} "
+            f"{size_mb:>6.1f} MB  {record.get('status') or 'ready'}"
+        )
 
     print(f"\n  Download presets: {', '.join(PRESETS)}")
-    db.close()
 
 
 def model_info(model_id):
     """Show details for a specific model."""
     init_model_registry()
-    db = get_db()
-
-    model = db.execute(
-        "SELECT * FROM model_registry WHERE id = ?", (model_id,)
-    ).fetchone()
+    model = models.get_model(model_id)
 
     if not model:
         print(f"[SHELL] Model not found: {model_id}")
-        db.close()
         return
 
-    print(f"\n  Model: {model[0]}")
-    print(f"  Name: {model[1]}")
-    print(f"  Source: {model[2]}")
-    print(f"  Path: {model[3]}")
-    print(f"  Quantization: {model[4]}")
-    print(f"  Size: {model[5] / (1024*1024):.1f} MB")
-    print(f"  Role: {model[7]}")
-    print(f"  Downloaded: {model[6]}")
-
-    db.close()
+    print(f"\n  Model: {model['id']}")
+    print(f"  Name: {model['name']}")
+    print(f"  Source: {model.get('repo_id') or model.get('source')}")
+    print(f"  Path: {model['file_path']}")
+    print(f"  Quantization: {model.get('quantization')}")
+    print(f"  Size: {(model.get('size_bytes') or 0) / (1024*1024):.1f} MB")
+    print(f"  License: {model.get('license') or 'Not declared'}")
+    print(f"  Revision: {model.get('revision') or 'local'}")
+    print(f"  Status: {model.get('status') or 'ready'}")
 
 
 # ─── SEARCH ───────────────────────────────────────────────────

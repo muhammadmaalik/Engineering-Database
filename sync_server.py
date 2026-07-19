@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,7 +34,25 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from core import paths  # noqa: E402
-from core.sync import diff_inventories, file_sha256, local_inventory  # noqa: E402
+from core.discovery import is_direct_address  # noqa: E402
+from core.peer_auth import (  # noqa: E402
+    NONCE_HEADER,
+    IdentityStore,
+    PairingSessionStore,
+    PeerAuthError,
+    encode_connection_key,
+    sign_response,
+    verify_request,
+)
+from core.sync import (  # noqa: E402
+    MAX_BATCH_BYTES,
+    MAX_FILE_BYTES,
+    apply_tombstones,
+    diff_inventories,
+    file_sha256,
+    local_inventory,
+    tracked_local_state,
+)
 
 HOST = "0.0.0.0"
 PORT = 8090
@@ -41,7 +60,10 @@ PORT = 8090
 
 def _auth_ok(handler: BaseHTTPRequestHandler) -> bool:
     cfg = paths.load_config()
-    token = (cfg.get("sync") or {}).get("token") or ""
+    sync_cfg = cfg.get("sync") or {}
+    if not bool(sync_cfg.get("allow_legacy_token", False)):
+        return False
+    token = sync_cfg.get("token") or ""
     if not token:
         return True
     auth = handler.headers.get("Authorization", "")
@@ -55,15 +77,69 @@ def _json_response(handler: BaseHTTPRequestHandler, code: int, payload: Any) -> 
     handler.send_response(code)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(body)))
+    _add_response_auth_headers(handler, code, body)
     handler.end_headers()
     handler.wfile.write(body)
 
 
-def _read_body(handler: BaseHTTPRequestHandler) -> bytes:
-    length = int(handler.headers.get("Content-Length", "0") or 0)
+def _add_response_auth_headers(handler: BaseHTTPRequestHandler, code: int, body: bytes) -> None:
+    nonce = getattr(handler, "_request_nonce", None)
+    identity = getattr(handler, "_server_identity", None)
+    if nonce and identity:
+        for key, value in sign_response(identity, code, body, nonce).items():
+            handler.send_header(key, value)
+
+
+def _read_body(handler: BaseHTTPRequestHandler, limit: int = MAX_BATCH_BYTES) -> bytes:
+    try:
+        length = int(handler.headers.get("Content-Length", "0") or 0)
+    except ValueError as exc:
+        raise ValueError("invalid content length") from exc
     if length <= 0:
         return b""
+    if length > limit:
+        raise ValueError("request payload too large")
     return handler.rfile.read(length)
+
+
+def _is_v2(path: str) -> bool:
+    return path == "/v2" or path.startswith("/v2/")
+
+
+def _legacy_or_reject(handler: BaseHTTPRequestHandler) -> bool:
+    if _auth_ok(handler):
+        return True
+    _json_response(handler, 401, {"error": "legacy token sync is disabled or unauthorized"})
+    return False
+
+
+def _authorize_v2(
+    handler: BaseHTTPRequestHandler,
+    parsed: Any,
+    body: bytes,
+    required_scope: str,
+) -> bool:
+    if not is_direct_address(handler.client_address[0]):
+        _json_response(handler, 403, {"error": "direct LAN/WireGuard peers only"})
+        return False
+    try:
+        store = IdentityStore()
+        identity = store.load_or_create_identity()
+        verify_request(
+            store,
+            handler.command,
+            parsed.path,
+            parsed.query,
+            body,
+            handler.headers,
+            required_scope,
+        )
+        handler._request_nonce = handler.headers[NONCE_HEADER]
+        handler._server_identity = identity
+        return True
+    except PeerAuthError as exc:
+        _json_response(handler, 401, {"error": str(exc)})
+        return False
 
 
 def _safe_vault_path(rel: str) -> Path:
@@ -78,19 +154,33 @@ def _conflict_path(rel: str, ts: int | None = None) -> str:
 
 
 def build_manifest() -> dict[str, Any]:
-    files = local_inventory(paths.VAULT_ROOT)
+    files, tombstones = tracked_local_state(paths.VAULT_ROOT)
     return {
         "vault_root": str(paths.VAULT_ROOT),
         "roots": list(paths.SYNC_ROOTS),
         "count": len(files),
         "files": files,
+        "tombstones": tombstones,
     }
 
 
 def write_vault_file(rel: str, data: bytes, mtime: float | None = None) -> dict[str, Any]:
+    if len(data) > MAX_FILE_BYTES:
+        raise ValueError("file exceeds maximum sync size")
     dest = _safe_vault_path(rel)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{dest.name}.", dir=str(dest.parent))
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, dest)
+    finally:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
     if mtime is not None:
         try:
             os.utime(dest, (mtime, mtime))
@@ -112,6 +202,7 @@ def handle_push_files(files: list[dict[str, Any]]) -> dict[str, Any]:
     conflicts: list[dict[str, str]] = []
     skipped: list[str] = []
     ts = int(time.time())
+    total_bytes = 0
 
     for item in files:
         rel = item.get("path")
@@ -120,7 +211,13 @@ def handle_push_files(files: list[dict[str, Any]]) -> dict[str, Any]:
         content_b64 = item.get("content_b64")
         if content_b64 is None:
             continue
-        data = base64.b64decode(content_b64)
+        try:
+            data = base64.b64decode(content_b64, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("invalid base64 file content") from exc
+        total_bytes += len(data)
+        if len(data) > MAX_FILE_BYTES or total_bytes > MAX_BATCH_BYTES:
+            raise ValueError("sync payload exceeds size limit")
         incoming_mtime = float(item.get("mtime") or time.time())
         incoming_hash = item.get("sha256") or hashlib.sha256(data).hexdigest()
 
@@ -135,9 +232,7 @@ def handle_push_files(files: list[dict[str, Any]]) -> dict[str, Any]:
                 conflict_rel = _conflict_path(rel, ts)
                 src = _safe_vault_path(rel)
                 if src.exists():
-                    conflict_abs = _safe_vault_path(conflict_rel)
-                    conflict_abs.parent.mkdir(parents=True, exist_ok=True)
-                    conflict_abs.write_bytes(src.read_bytes())
+                    write_vault_file(conflict_rel, src.read_bytes(), src.stat().st_mtime)
                     conflicts.append({"path": rel, "saved_as": conflict_rel})
             elif local_mtime > incoming_mtime:
                 # Local newer — keep local, stash incoming as conflict copy.
@@ -160,17 +255,29 @@ def handle_push_files(files: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 class SyncHandler(BaseHTTPRequestHandler):
-    server_version = "MotherbrainSync/1.0"
+    server_version = "MotherbrainSync/2.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write(f"[sync] {self.address_string()} - {fmt % args}\n")
 
     def do_GET(self) -> None:  # noqa: N802
-        if not _auth_ok(self):
-            _json_response(self, 401, {"error": "unauthorized"})
-            return
         parsed = urlparse(self.path)
-        route = parsed.path.rstrip("/") or "/"
+        if parsed.path.rstrip("/") == "/health":
+            _json_response(
+                self,
+                200,
+                {"ok": True, "service": "occhialini-sync", "protocol": "v2"},
+            )
+            return
+        v2 = _is_v2(parsed.path)
+        if v2:
+            if not _authorize_v2(self, parsed, b"", "sync:read"):
+                return
+            route = parsed.path[3:].rstrip("/") or "/"
+        else:
+            if not _legacy_or_reject(self):
+                return
+            route = parsed.path.rstrip("/") or "/"
 
         if route == "/health":
             _json_response(
@@ -212,6 +319,7 @@ class SyncHandler(BaseHTTPRequestHandler):
             self.send_header("X-Vault-Mtime", str(st.st_mtime))
             self.send_header("X-Vault-Size", str(st.st_size))
             self.send_header("X-Vault-Sha256", file_sha256(path))
+            _add_response_auth_headers(self, 200, data)
             self.end_headers()
             self.wfile.write(data)
             return
@@ -219,11 +327,20 @@ class SyncHandler(BaseHTTPRequestHandler):
         _json_response(self, 404, {"error": "not found"})
 
     def do_PUT(self) -> None:  # noqa: N802
-        if not _auth_ok(self):
-            _json_response(self, 401, {"error": "unauthorized"})
-            return
         parsed = urlparse(self.path)
-        route = parsed.path.rstrip("/") or "/"
+        try:
+            data = _read_body(self, MAX_FILE_BYTES)
+        except ValueError as exc:
+            _json_response(self, 413, {"error": str(exc)})
+            return
+        if _is_v2(parsed.path):
+            if not _authorize_v2(self, parsed, data, "sync:write"):
+                return
+            route = parsed.path[3:].rstrip("/") or "/"
+        else:
+            if not _legacy_or_reject(self):
+                return
+            route = parsed.path.rstrip("/") or "/"
         if route != "/file":
             _json_response(self, 404, {"error": "not found"})
             return
@@ -239,27 +356,41 @@ class SyncHandler(BaseHTTPRequestHandler):
             _json_response(self, 400, {"error": str(e)})
             return
 
-        data = _read_body(self)
         mtime_hdr = self.headers.get("X-Vault-Mtime")
-        mtime = float(mtime_hdr) if mtime_hdr else None
         try:
+            mtime = float(mtime_hdr) if mtime_hdr else None
             info = write_vault_file(rel, data, mtime)
             _json_response(self, 200, {"ok": True, **info})
-        except Exception as e:
+        except (OSError, ValueError) as e:
             _json_response(self, 500, {"error": str(e)})
 
     def do_POST(self) -> None:  # noqa: N802
-        if not _auth_ok(self):
-            _json_response(self, 401, {"error": "unauthorized"})
-            return
         parsed = urlparse(self.path)
-        route = parsed.path.rstrip("/") or "/"
         try:
             raw = _read_body(self)
             body = json.loads(raw.decode("utf-8") or "{}")
-        except json.JSONDecodeError:
-            _json_response(self, 400, {"error": "invalid json"})
+            if not isinstance(body, dict):
+                raise ValueError("JSON body must be an object")
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            code = 413 if "large" in str(exc) else 400
+            _json_response(self, code, {"error": str(exc) or "invalid json"})
             return
+        if parsed.path.startswith("/v2/pair/"):
+            self._handle_pairing(parsed.path, body)
+            return
+        if _is_v2(parsed.path):
+            scope = (
+                "sync:write"
+                if parsed.path.endswith(("/sync/push", "/sync/tombstones"))
+                else "sync:read"
+            )
+            if not _authorize_v2(self, parsed, raw, scope):
+                return
+            route = parsed.path[3:].rstrip("/") or "/"
+        else:
+            if not _legacy_or_reject(self):
+                return
+            route = parsed.path.rstrip("/") or "/"
 
         if route == "/sync/pull":
             # Client asks server for file contents to pull down.
@@ -270,6 +401,7 @@ class SyncHandler(BaseHTTPRequestHandler):
                 server_inv = local_inventory()
                 want = diff_inventories(client_inv, server_inv)["pull"]
             files = []
+            total_bytes = 0
             for rel in want or []:
                 try:
                     path = _safe_vault_path(rel)
@@ -278,6 +410,10 @@ class SyncHandler(BaseHTTPRequestHandler):
                 if not path.is_file():
                     continue
                 st = path.stat()
+                if st.st_size > MAX_FILE_BYTES or total_bytes + st.st_size > MAX_BATCH_BYTES:
+                    _json_response(self, 413, {"error": "requested files exceed sync size limit"})
+                    return
+                total_bytes += st.st_size
                 files.append(
                     {
                         "path": rel,
@@ -292,11 +428,90 @@ class SyncHandler(BaseHTTPRequestHandler):
 
         if route == "/sync/push":
             files = body.get("files") or []
-            result = handle_push_files(files)
-            _json_response(self, 200, result)
+            if not isinstance(files, list):
+                _json_response(self, 400, {"error": "files must be a list"})
+                return
+            try:
+                result = handle_push_files(files)
+                _json_response(self, 200, result)
+            except ValueError as exc:
+                _json_response(self, 400, {"error": str(exc)})
+            return
+
+        if route == "/sync/tombstones":
+            tombstones = body.get("tombstones") or {}
+            if not isinstance(tombstones, dict) or len(tombstones) > 10000:
+                _json_response(self, 400, {"error": "invalid tombstones"})
+                return
+            try:
+                deleted = apply_tombstones(
+                    {str(rel): float(timestamp) for rel, timestamp in tombstones.items()},
+                    paths.VAULT_ROOT,
+                )
+                _json_response(self, 200, {"ok": True, "deleted": deleted, "count": len(deleted)})
+            except (TypeError, ValueError, OSError) as exc:
+                _json_response(self, 400, {"error": str(exc)})
             return
 
         _json_response(self, 404, {"error": "not found"})
+
+    def _handle_pairing(self, route: str, body: dict[str, Any]) -> None:
+        """Unauthenticated bootstrap protected by a short-lived signed secret."""
+        try:
+            sessions = PairingSessionStore()
+            if route == "/v2/pair/open":
+                if self.client_address[0] not in {"127.0.0.1", "::1"}:
+                    raise PeerAuthError("pairing windows can only be opened locally")
+                identity = IdentityStore().load_or_create_identity()
+                configured = paths.load_config().get("sync") or {}
+                server_url = str(body.get("server_url") or configured.get("public_url") or "")
+                if not server_url:
+                    raise PeerAuthError("server_url is required for a connection key")
+                key, invitation = encode_connection_key(identity, server_url)
+                sessions.open(invitation)
+                _json_response(
+                    self,
+                    200,
+                    {
+                        "connection_key": key,
+                        "session_id": invitation["session_id"],
+                        "secret": invitation["secret"],
+                        "expires_at": invitation["expires_at"],
+                    },
+                )
+                return
+            if route == "/v2/pair/join":
+                status = sessions.join(body)
+                _json_response(self, 200, status)
+                return
+            if route == "/v2/pair/status":
+                status = sessions.public_status(str(body.get("session_id", "")), str(body.get("secret", "")))
+                _json_response(self, 200, status)
+                return
+            if route == "/v2/pair/confirm":
+                side = str(body.get("side", ""))
+                if side == "host" and self.client_address[0] not in {"127.0.0.1", "::1"}:
+                    raise PeerAuthError("host confirmation must happen on the host")
+                session_id = str(body.get("session_id", ""))
+                secret = str(body.get("secret", ""))
+                status = sessions.confirm(
+                    session_id,
+                    secret,
+                    side,
+                    str(body.get("sas", "")),
+                )
+                guest = sessions.completed_guest(session_id, secret)
+                if guest:
+                    IdentityStore().trust_peer(
+                        str(guest["guest_device_id"]),
+                        str(guest["guest_public_key"]),
+                        str(guest.get("guest_name") or ""),
+                    )
+                _json_response(self, 200, status)
+                return
+            _json_response(self, 404, {"error": "pairing endpoint not found"})
+        except PeerAuthError as exc:
+            _json_response(self, 400, {"error": str(exc)})
 
 
 def main() -> None:

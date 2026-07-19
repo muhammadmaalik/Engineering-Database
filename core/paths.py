@@ -9,17 +9,22 @@ never does.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import sys
+import threading
 from copy import deepcopy
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 HOME = Path.home()
 MOTHERBRAIN_DIR = HOME / ".motherbrain"
 CONFIG_PATH = MOTHERBRAIN_DIR / "config.json"
+CONFIG_LOCK_PATH = MOTHERBRAIN_DIR / "config.lock"
 VAULT_ROOT = MOTHERBRAIN_DIR / "vault"
 CERTS_DIR = MOTHERBRAIN_DIR / "certs"
+PEER_STATE_DIR = MOTHERBRAIN_DIR / "peers"
 
 PROJECTS_DIR = VAULT_ROOT / "projects"
 CHATS_DIR = VAULT_ROOT / "chats"
@@ -64,16 +69,28 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "inference": {
         "mode": "local",
         "url": "http://127.0.0.1:8081",
-        "model": "qwen2.5-coder-32b-instruct-q3_k_m.gguf",
+        # First run never downloads or activates a model without user choice.
+        "model": "",
         # ~8GB laptop GPUs: partial CUDA offload; keep ctx/slots small for KV.
         "ngl": 28,
         "ctx": 2048,
         "parallel": 1,
         "timeout": 300,
     },
+    "models": {
+        "onboarding_completed": False,
+        "community_search_enabled": False,
+    },
     "sync": {
         "server_url": "http://10.0.0.1:8090",
         "token": "",
+        "allow_legacy_token": False,
+        "protocol": "v2",
+        "listen_host": "0.0.0.0",
+        "port": 8090,
+        "clock_skew_seconds": 120,
+        "max_payload_bytes": 64 * 1024 * 1024,
+        "discovery_enabled": True,
     },
     "web": {
         "host": "10.0.0.1",
@@ -96,6 +113,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "role": "laptop",
 }
+
+_CONFIG_THREAD_LOCK = threading.RLock()
 
 VAULT_SUBDIRS = [
     PROJECTS_DIR,
@@ -136,6 +155,7 @@ def ensure_dirs() -> None:
     """Create motherbrain home + vault subdirectory tree + certs dir."""
     MOTHERBRAIN_DIR.mkdir(parents=True, exist_ok=True)
     CERTS_DIR.mkdir(parents=True, exist_ok=True)
+    PEER_STATE_DIR.mkdir(parents=True, exist_ok=True)
     for d in VAULT_SUBDIRS:
         d.mkdir(parents=True, exist_ok=True)
 
@@ -156,16 +176,52 @@ def load_config() -> dict[str, Any]:
     if not isinstance(data, dict):
         return ensure_config()
     cfg = _merge_defaults(data)
-    sync_cfg = cfg.setdefault("sync", {})
-    if not (sync_cfg.get("token") or "").strip():
-        sync_cfg["token"] = secrets.token_hex(16)
-        save_config(cfg)
     return cfg
 
 
 def save_config(cfg: dict[str, Any]) -> None:
+    """Atomically save config while serializing classic/modern app writers."""
     ensure_dirs()
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    payload = json.dumps(cfg, indent=2) + "\n"
+    with _config_file_lock():
+        temp = CONFIG_PATH.with_name(
+            f".{CONFIG_PATH.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+        )
+        try:
+            temp.write_text(payload, encoding="utf-8")
+            os.replace(temp, CONFIG_PATH)
+        finally:
+            temp.unlink(missing_ok=True)
+
+
+@contextmanager
+def _config_file_lock():
+    with _CONFIG_THREAD_LOCK:
+        CONFIG_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with CONFIG_LOCK_PATH.open("a+b") as handle:
+            handle.seek(0)
+            if handle.read(1) == b"":
+                handle.seek(0)
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def ensure_config(overwrite: bool = False) -> dict[str, Any]:
@@ -185,9 +241,9 @@ def ensure_config(overwrite: bool = False) -> dict[str, Any]:
         cfg = _merge_defaults(existing)
     else:
         cfg = default_config()
-    # Always mint a sync token once so laptop/home share a shared secret.
+    # Legacy bearer tokens are opt-in; new installs use peer identities.
     sync_cfg = cfg.setdefault("sync", {})
-    if not (sync_cfg.get("token") or "").strip():
+    if sync_cfg.get("allow_legacy_token") and not (sync_cfg.get("token") or "").strip():
         sync_cfg["token"] = secrets.token_hex(16)
     save_config(cfg)
     return cfg
@@ -245,6 +301,8 @@ def sync_server_url(cfg: dict[str, Any] | None = None) -> str:
 def active_model_path(cfg: dict[str, Any] | None = None) -> Path:
     cfg = cfg or load_config()
     name = cfg.get("inference", {}).get("model", "")
+    if not str(name).strip():
+        return MODELS_DIR / ".no-model-selected"
     path = Path(name)
     if path.is_absolute():
         return path

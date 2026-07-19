@@ -12,6 +12,8 @@ import requests
 from . import paths
 
 _server_process: subprocess.Popen | None = None
+_server_model_path: Path | None = None
+_server_log_handle: Any | None = None
 
 # Chat-friendly defaults for ~8GB VRAM (partial offload on 32B).
 DEFAULT_N_PREDICT = 512
@@ -47,6 +49,20 @@ def is_ready(cfg: dict[str, Any] | None = None, timeout: float = 3.0) -> bool:
         return True
     except requests.RequestException:
         return False
+
+
+def served_model_path(cfg: dict[str, Any] | None = None) -> Path | None:
+    """Best-effort model path from llama-server's metadata endpoint."""
+    try:
+        response = requests.get(f"{paths.inference_base_url(cfg)}/props", timeout=2.0)
+        response.raise_for_status()
+        data = response.json()
+        value = data.get("model_path") or data.get("model")
+        if not value and isinstance(data.get("default_generation_settings"), dict):
+            value = data["default_generation_settings"].get("model")
+        return Path(value).resolve() if value else None
+    except (requests.RequestException, ValueError, TypeError, OSError):
+        return None
 
 
 def complete(
@@ -112,15 +128,23 @@ def start_server(
     When ``force`` is True, stop any locally tracked process and start fresh
     even if /health already answers (used after config changes).
     """
-    global _server_process
+    global _server_process, _server_model_path, _server_log_handle
     cfg = cfg or paths.load_config()
     inf = cfg.get("inference") or {}
     if str(inf.get("mode", "local")).lower() == "remote":
         return is_ready(cfg)
 
-    # Already serving (e.g. started outside this process).
-    if not force and is_ready(cfg, timeout=2.0):
-        return True
+    # Never silently report an old model as the newly selected one.
+    if is_ready(cfg, timeout=2.0):
+        expected = paths.active_model_path(cfg).resolve()
+        actual = _server_model_path or served_model_path(cfg)
+        if not force and (actual is None or actual == expected):
+            return True
+        if _server_process is None:
+            raise RuntimeError(
+                "A different llama-server is already using the configured port. "
+                "Stop it before activating another model."
+            )
 
     model_path = Path(model) if model else paths.active_model_path(cfg)
     if not model_path.exists():
@@ -168,22 +192,36 @@ def start_server(
         "-fa",
         "on",
     ]
+    log_path = paths.MOTHERBRAIN_DIR / "llama-server.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    _server_log_handle = open(log_path, "ab")
     _server_process = subprocess.Popen(
         cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=_server_log_handle,
+        stderr=subprocess.STDOUT,
     )
+    _server_model_path = model_path.resolve()
 
-    for _ in range(max(1, wait_seconds)):
+    for i in range(max(1, wait_seconds)):
         if is_ready(cfg):
             return True
+        if _server_process.poll() is not None:
+            tail = ""
+            try:
+                tail = log_path.read_text(encoding="utf-8", errors="replace")[-800:]
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"llama-server exited early (code {_server_process.returncode}). "
+                f"See {log_path}:\n{tail}"
+            )
         time.sleep(1)
     return False
 
 
 def stop_server() -> None:
     """Terminate the locally spawned llama-server process, if any."""
-    global _server_process
+    global _server_process, _server_model_path, _server_log_handle
     if _server_process is not None:
         try:
             _server_process.terminate()
@@ -194,6 +232,47 @@ def stop_server() -> None:
             except Exception:
                 pass
         _server_process = None
+    _server_model_path = None
+    if _server_log_handle is not None:
+        try:
+            _server_log_handle.close()
+        except Exception:
+            pass
+        _server_log_handle = None
+
+
+def activate_model(
+    model: Path | str,
+    *,
+    start: bool = True,
+    wait_seconds: int = 90,
+    **settings: Any,
+) -> dict[str, Any]:
+    """Explicitly activate a GGUF and restart the managed server if requested."""
+    from . import models
+
+    candidate = Path(model)
+    resolved = candidate if candidate.is_absolute() else paths.MODELS_DIR / candidate.name
+    if not resolved.is_file():
+        raise FileNotFoundError(resolved)
+    if is_ready(timeout=2.0) and _server_process is None:
+        current = served_model_path()
+        if current is None or current != resolved.resolve():
+            raise RuntimeError(
+                "An externally managed llama-server is active. Stop it before changing models."
+            )
+    stop_server()
+    selected = models.set_active_model(str(resolved), **settings)
+    if start:
+        selected["server_ready"] = start_server(
+            model=resolved,
+            cfg=paths.load_config(),
+            wait_seconds=wait_seconds,
+            force=True,
+        )
+    else:
+        selected["server_ready"] = False
+    return selected
 
 
 def server_process() -> subprocess.Popen | None:

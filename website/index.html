@@ -25,6 +25,7 @@
     <nav aria-label="Primary navigation">
       <a href="#mission">Mission</a>
       <a href="#systems">Systems</a>
+      <a href="#downloads">Downloads</a>
       <a href="#architecture">Architecture</a>
       <a href="#docs">Initialize</a>
     </nav>
@@ -42,7 +43,7 @@
           <span>BEYOND</span>
           <span>THE CLOUD</span>
         </h1>
-        <p class="hero-lede">A local-first engineering intelligence for hardware, robotics, and ambitious machines. Your models. Your vault. Your network.</p>
+        <p class="hero-lede">For Developers, By Developers. A local-first engineering intelligence for hardware, robotics, and ambitious machines. Your models. Your vault. Your network.</p>
         <div class="hero-actions">
           <a class="button button-light" href="#docs">Initialize system <span>↗</span></a>
           <a class="button button-ghost" href="#architecture">Explore architecture <span>↓</span></a>
@@ -111,8 +112,8 @@
         <article class="capability-card reveal">
           <span class="card-code">SYN / 04</span><div class="line-icon icon-sync"></div>
           <h3>Two-Way Sync</h3>
-          <p>Synchronize home and laptop over WireGuard using hashes, modification times, and authenticated HTTP.</p>
-          <ul><li>SHA-256 inventory</li><li>Bearer tokens</li><li>No silent overwrites</li></ul>
+          <p>Synchronize home and laptop over LAN or WireGuard with per-device Ed25519 identities and signed HTTP.</p>
+          <ul><li>Two-device confirmation</li><li>Replay protection</li><li>Deletion tombstones</li></ul>
         </article>
         <article class="capability-card reveal">
           <span class="card-code">SIM / 05</span><div class="line-icon icon-sim"></div>
@@ -135,8 +136,8 @@
         <article class="capability-card reveal">
           <span class="card-code">SYS / 08</span><div class="line-icon icon-terminal"></div>
           <h3>Integrated Workstation</h3>
-          <p>A sharp Windows desktop app with model management, WSL terminal, projects, datasets, hardware, and sync.</p>
-          <ul><li>Single-file EXE</li><li>PIN gate</li><li>Interactive WSL</li></ul>
+          <p>Choose the established classic workstation or the separate modern liquid-glass desktop over the same local core.</p>
+          <ul><li>Two signed EXE targets</li><li>PIN gate</li><li>Shared private vault</li></ul>
         </article>
       </div>
     </section>
@@ -190,7 +191,7 @@
           <path class="path path-b" d="M260,310 C430,520 760,520 900,310"/>
           <path class="path path-c" d="M920,340 C930,430 860,500 760,520"/>
         </svg>
-        <article class="node node-laptop"><span>EDGE NODE / 01</span><div class="node-icon">▰</div><h3>LAPTOP</h3><p>Motherbrain.exe<br>Local 32B inference<br>Engineering workstation</p><b>192.168.x.x</b></article>
+        <article class="node node-laptop"><span>EDGE NODE / 01</span><div class="node-icon">▰</div><h3>LAPTOP</h3><p>Occhialini.exe or Motherbrain.exe<br>Optional local inference<br>Engineering workstation</p><b>192.168.x.x</b></article>
         <div class="network-core"><div class="core-ring"></div><span>WIREGUARD</span><b>PRIVATE ORBIT</b><small>ENCRYPTED TUNNEL</small></div>
         <article class="node node-home"><span>CORE NODE / 02</span><div class="node-icon">▥</div><h3>HOME PC</h3><p>Vault authority<br>Heavy GPU inference<br>Sync server :8090</p><b>10.0.0.1</b></article>
         <article class="node node-phone"><span>REMOTE / 03</span><div class="node-icon">▯</div><h3>PHONE</h3><p>HTTPS companion<br>Token authenticated</p><b>:8443</b></article>
@@ -230,7 +231,7 @@
         <p>Your designs are not training material for someone else's model. Occhialini keeps prompts, files, chats, and training data on hardware you control.</p>
         <div class="security-facts">
           <div><b>PIN GATE</b><span>Masked · digits only · constant-time verification</span></div>
-          <div><b>VAULT AUTH</b><span>Generated bearer token · protected fields</span></div>
+          <div><b>PEER AUTH</b><span>Ed25519 identities · signed requests · replay rejection</span></div>
           <div><b>VPN ONLY</b><span>WireGuard private routes · no public bind</span></div>
           <div><b>WEB HARDENING</b><span>TLS · CSP · rate limits · tools off</span></div>
         </div>
@@ -256,11 +257,32 @@
       </ol>
     </section>
 
+    <section class="docs section-pad" id="downloads">
+      <div class="section-heading reveal">
+        <p class="eyebrow"><span>09</span> Desktop builds</p>
+        <h2>CHOOSE YOUR<br>COMMAND CENTER.</h2>
+        <p>Both applications use the same local vault and core services. Download models separately inside either app.</p>
+      </div>
+      <div class="setup-grid">
+        <article class="setup-panel reveal">
+          <header><span>MODERN</span><b>OCCHIALINI.EXE</b></header>
+          <p>PySide6 liquid-glass interface with simple navigation, first-run model onboarding, community GGUF discovery, peer pairing, and Isaac Sim controls.</p>
+          <a class="button button-light" href="https://github.com/muhammadmaalik/Engineering-Database/releases/latest/download/Occhialini.exe">Download Occhialini <span>↓</span></a>
+        </article>
+        <article class="setup-panel reveal">
+          <header><span>CLASSIC</span><b>MOTHERBRAIN.EXE</b></header>
+          <p>The established Tk workstation with WSL terminal, project editor, training tools, model manager, secure peer sync, and shared fixes.</p>
+          <a class="button button-ghost" href="https://github.com/muhammadmaalik/Engineering-Database/releases/latest/download/Motherbrain.exe">Download Classic <span>↓</span></a>
+        </article>
+      </div>
+      <div class="sync-note reveal"><span>VERIFY</span><p>Compare each download with <a href="https://github.com/muhammadmaalik/Engineering-Database/releases/latest/download/SHA256SUMS.txt">SHA256SUMS.txt</a>. Windows builds are not currently code-signed, so SmartScreen may warn on first launch.</p></div>
+    </section>
+
     <section class="docs section-pad" id="docs">
       <div class="section-heading reveal">
-        <p class="eyebrow"><span>09</span> Launch sequence</p>
+        <p class="eyebrow"><span>10</span> Launch sequence</p>
         <h2>INITIALIZE YOUR<br>PRIVATE NETWORK.</h2>
-        <p>Two machines, one token, one engineering memory.</p>
+        <p>Two machines, matching verification codes, one engineering memory.</p>
       </div>
       <div class="setup-grid">
         <article class="setup-panel reveal">
@@ -268,22 +290,22 @@
           <ol><li><b>01</b><div>Clone the repository<pre><code>git clone https://github.com/muhammadmaalik/Engineering-Database.git motherbrain
 cd motherbrain</code></pre></div></li>
             <li><b>02</b><div>Build the workstation<pre><code>powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1</code></pre></div></li>
-            <li><b>03</b><div>Open <code>dist\Motherbrain.exe</code>, choose <strong>Vault Sync</strong>, set role to <code>home</code>, save, and start the sync server.</div></li>
-            <li><b>04</b><div>Copy the generated sync token and note the home PC's WireGuard or LAN IP.</div></li></ol>
+            <li><b>03</b><div>Open either app, start the sync server, and open a two-minute pairing window using the home PC's LAN or WireGuard URL.</div></li>
+            <li><b>04</b><div>Share the connection key with the laptop. Keep WireGuard enabled when file confidentiality matters.</div></li></ol>
         </article>
         <article class="setup-panel reveal">
           <header><span>EDGE NODE</span><b>LAPTOP</b></header>
-          <ol><li><b>01</b><div>Open the latest <code>dist\Motherbrain.exe</code> and unlock the workstation.</div></li>
-            <li><b>02</b><div>In <strong>Vault Sync</strong>, set role to <code>laptop</code> and use:<pre><code>http://&lt;HOME_IP&gt;:8090</code></pre></div></li>
-            <li><b>03</b><div>Enter the same sync token, save, then run <strong>Test</strong>.</div></li>
-            <li><b>04</b><div>Select <strong>Sync Now</strong>. Projects, chats, datasets, adapters, and exports enter orbit.</div></li></ol>
+          <ol><li><b>01</b><div>Open <code>Occhialini.exe</code> or <code>Motherbrain.exe</code> and unlock it.</div></li>
+            <li><b>02</b><div>Join the connection key from the home PC.</div></li>
+            <li><b>03</b><div>Confirm that both screens show the same 8-digit code, then approve it on both devices.</div></li>
+            <li><b>04</b><div>Select <strong>Sync Now</strong>. Creates, updates, deletions, and conflicts synchronize without sharing a bearer token.</div></li></ol>
         </article>
       </div>
       <div class="sync-note reveal"><span>IMPORTANT</span><p>Large GGUF model files are intentionally excluded from sync. Install models independently on each inference machine.</p></div>
     </section>
 
     <section class="stack section-pad">
-      <p class="eyebrow reveal"><span>10</span> Flight hardware</p>
+      <p class="eyebrow reveal"><span>11</span> Flight hardware</p>
       <div class="stack-marquee" aria-label="Technology stack"><div>
         <span>PYTHON 3.12</span><i>◆</i><span>C++20</span><i>◆</i><span>LLAMA.CPP</span><i>◆</i><span>CUDA</span><i>◆</i><span>SQLITE FTS5</span><i>◆</i><span>WIREGUARD</span><i>◆</i><span>ISAAC SIM</span><i>◆</i><span>ROS 2</span><i>◆</i><span>UNSLOTH</span><i>◆</i>
       </div></div>
@@ -291,7 +313,7 @@ cd motherbrain</code></pre></div></li>
 
     <section class="faq section-pad">
       <div class="section-heading reveal">
-        <p class="eyebrow"><span>11</span> Mission briefing</p>
+        <p class="eyebrow"><span>12</span> Mission briefing</p>
         <h2>COMMON SIGNALS.</h2>
       </div>
       <div class="faq-list">
@@ -307,7 +329,7 @@ cd motherbrain</code></pre></div></li>
     <section class="final-cta">
       <div class="final-moon" aria-hidden="true"></div>
       <div class="reveal">
-        <p class="eyebrow"><span>12</span> Begin transmission</p>
+        <p class="eyebrow"><span>13</span> Begin transmission</p>
         <h2>BUILD A BRAIN<br>FOR THE THINGS<br>YOU BUILD.</h2>
         <p>Private intelligence. Persistent engineering memory. Your hardware, in your orbit.</p>
         <a class="button button-light" href="#docs">Start the launch sequence <span>↗</span></a>
@@ -319,7 +341,7 @@ cd motherbrain</code></pre></div></li>
     <a class="brand" href="#top"><img class="brand-mark" src="logo.svg" alt=""><span>OCCHIALINI</span></a>
     <p>LOCAL-FIRST ENGINEERING INTELLIGENCE<br>NO CLOUD REQUIRED.</p>
     <div><a href="#systems">Systems</a><a href="#architecture">Architecture</a><a href="#docs">Initialize</a><a href="https://github.com/muhammadmaalik/Engineering-Database">GitHub ↗</a></div>
-    <small>© 2026 OCCHIALINI / BUILT FOR EARTH AND BEYOND</small>
+    <small>© 2026 OCCHIALINI / FOR DEVELOPERS, BY DEVELOPERS.</small>
   </footer>
 
   <script src="script.js"></script>

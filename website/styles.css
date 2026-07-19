@@ -326,8 +326,11 @@ main, footer { position: relative; z-index: 1; }
 .setup-panel li > b { font: 400 9px/1 var(--mono); color: white; }
 .setup-panel pre { background: #0d0d0d; border: 1px solid var(--line); padding: 12px; overflow-x: auto; color: var(--green); font-size: 9px; line-height: 1.6; white-space: pre-wrap; }
 .setup-panel code { color: var(--green); }
+.setup-panel > p { margin: 0; padding: 28px 25px 12px; color: #a6a69f; font-size: 14px; line-height: 1.75; }
+.setup-panel > .button { margin: 8px 25px 28px; }
 .sync-note { display: flex; align-items: center; gap: 25px; border: 1px solid var(--line); border-top: 0; padding: 20px 24px; }
 .sync-note span { color: var(--green); font: 400 8px/1 var(--mono); }.sync-note p { margin: 0; color: var(--dim); font-size: 13px; }
+.sync-note a { color: var(--paper); text-decoration: underline; text-underline-offset: 3px; }
 
 .stack { padding-top: 55px; padding-bottom: 55px; overflow: hidden; }
 .stack .eyebrow { margin-bottom: 35px; }

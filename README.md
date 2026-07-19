@@ -1,14 +1,15 @@
-# Motherbrain
+# Occhialini
 
-Local-first AI companion platform for custom hardware projects. Hybrid topology: laptop runs a local 32B model by default; home PC hosts the vault sync server and heavier GPU inference. Vault syncs both ways over the LAN/VPN.
+For Developers, By Developers. A local-first AI companion for hardware, robotics, and simulation. Model installation is optional and explicit; vault syncs over LAN or WireGuard using per-device keys.
 
 ## Architecture
 
 - **kernel/** — C++20 daemon. Shared memory IPC, hardware abstraction, inference scheduler.
 - **shell/** — Python CLI. Model management, dataset curation, training export.
-- **core/** — Shared companion core (context, tools, inference, models, sync, flywheel, web companion, Isaac Sim client).
+- **core/** — Shared companion core (catalog/downloads, inference, Ed25519 peer sync, context, tools, flywheel, Isaac Sim).
 - **isaac_sim/** — TCP bridge to run inside NVIDIA Isaac Sim.
-- **workstation.py** — Home GUI (project-aware companion chat, models, sync, Isaac Sim).
+- **workstation.py** — Classic Tk workstation, packaged as `Motherbrain.exe`.
+- **modern_app.py**, **modern_desktop/** — Separate PySide6 application, packaged as `Occhialini.exe`.
 - **sync_client.py** — Laptop client (vault sync + companion chat).
 - **sync_server.py** — Home vault sync HTTP server (`:8090`).
 - **web_companion.py** — Hardened HTTPS phone UI (WireGuard bind + token auth).
@@ -22,13 +23,14 @@ All runtime config lives at `~/.motherbrain/config.json` (created on first run /
   "inference": {
     "mode": "local",
     "url": "http://127.0.0.1:8081",
-    "model": "Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf",
-    "ngl": 99,
-    "ctx": 8192
+    "model": "",
+    "ngl": 28,
+    "ctx": 2048
   },
   "sync": {
     "server_url": "http://10.0.0.1:8090",
-    "token": ""
+    "protocol": "v2",
+    "allow_legacy_token": false
   },
   "web": {
     "host": "10.0.0.1",
@@ -60,11 +62,11 @@ Point laptop `sync.server_url` at this machine’s WireGuard (or LAN) IP, e.g. `
 
 ### Laptop
 
-Download the 32B GGUF once (shell preset):
+Choose an exact GGUF in either desktop app, import a local GGUF, or use the shell preset:
 
 ```bash
 python3 shell/main.py model download qwen-32b
-# equivalent: model download Qwen/Qwen2.5-Coder-32B-Instruct-GGUF Q4_K_M
+# community repositories require explicit exact-file selection
 ```
 
 Run local inference (CUDA Docker one-liner):
@@ -73,8 +75,8 @@ Run local inference (CUDA Docker one-liner):
 sudo docker run --gpus all -p 8081:8081 \
   -v ~/.motherbrain/vault/shared/base_models:/models \
   ghcr.io/ggml-org/llama.cpp:full-cuda \
-  --server -m /models/Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf \
-  --host 0.0.0.0 --port 8081 -ngl 99 -c 8192
+  --server -m /models/your-selected-model.gguf \
+  --host 127.0.0.1 --port 8081 -ngl 28 -c 2048
 
 python3 sync_client.py          # sync vault + chat as companion
 ```
@@ -83,7 +85,7 @@ Set `inference.mode` to `"remote"` and `inference.url` to the home llama URL whe
 
 ### WireGuard
 
-Use WireGuard (or equivalent) so the laptop can reach home `:8090` (sync) and optionally `:8081` (remote inference). Put the home VPN IP in `sync.server_url` / remote `inference.url`.
+Use WireGuard (or equivalent) so the laptop can reach home `:8090` and optionally `:8081`. Pair with a two-minute connection key, compare the same 8-digit code, and confirm on both machines. Ed25519 signatures authenticate peers; WireGuard encrypts file contents.
 
 ## Windows .exe
 
@@ -95,10 +97,32 @@ powershell -ExecutionPolicy Bypass -File scripts/build_exe.ps1
 powershell -ExecutionPolicy Bypass -File scripts/build_exe.ps1 -IncludeSyncClient
 ```
 
-Output: `dist/Motherbrain.exe` (from `workstation.py` via `motherbrain.spec`).  
+Outputs:
+
+- `dist/Motherbrain.exe` — classic workstation.
+- `dist/Occhialini.exe` — modern PySide6 desktop.
+- `dist/SHA256SUMS.txt` — release verification hashes.
+
 Runtime data still uses `%USERPROFILE%\.motherbrain` when frozen — never the PyInstaller `_MEIPASS` unpack dir. Do not commit `dist/` or `build/`.
 
-Requires: Python 3 + `pip install pyinstaller` (the script installs PyInstaller if needed).
+The build script installs pinned dependencies from `requirements-desktop.txt`, runs tests, builds both apps, and performs frozen startup smoke tests.
+
+## Model safety and activation
+
+- Two Occhialini custom models appear as disabled **Coming Soon** entries.
+- Reviewed presets disclose publisher, license, exact file, revision, quantization, and size.
+- Community Hugging Face search is opt-in and never executes repository code.
+- Downloads resume from `.part`, check disk space, verify size/hash when available, then atomically install and register.
+- Changing the active model explicitly restarts the managed llama-server; failed downloads are never activated.
+
+## Device-key sync
+
+1. On the host, start the sync server and open a two-minute pairing window.
+2. On the other device, enter/scan the connection key.
+3. Confirm the identical 8-digit code on both devices.
+4. Sync over a private LAN or WireGuard address.
+
+Private identities and trusted peers stay outside the synchronized vault. Signed `/v2` requests include timestamp, nonce, and body hash; replayed, revoked, over-limit, or out-of-skew requests are rejected. Legacy bearer endpoints are disabled unless `sync.allow_legacy_token` is explicitly enabled.
 
 ## iPhone web companion
 

@@ -1,48 +1,36 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for Motherbrain Workstation (Windows .exe).
-
-Vault/config always use ~/.motherbrain via core.paths (not _MEIPASS).
-Build:  powershell -File scripts/build_exe.ps1
-Output: dist/Motherbrain.exe
-"""
+"""PyInstaller one-file build for the modern PySide6 Occhialini app."""
 
 block_cipher = None
 
-# Only ship modules the workstation GUI needs. collect_submodules("core") would
-# also pull web_companion (and optional ML stacks via huggingface hooks).
 hidden = [
     "requests",
-    "urllib3",
-    "certifi",
-    "charset_normalizer",
-    "idna",
     "huggingface_hub",
-    "PIL",
-    "PIL.Image",
-    "PIL.ImageTk",
+    "cryptography",
+    "cryptography.hazmat.primitives.asymmetric.ed25519",
     "core",
-    "core.paths",
+    "core.auth",
     "core.context",
-    "core.tools",
+    "core.discovery",
+    "core.flywheel",
     "core.inference",
+    "core.isaac_sim",
     "core.model_catalog",
     "core.model_download",
     "core.models",
+    "core.paths",
     "core.peer_auth",
-    "core.discovery",
     "core.sync",
     "core.sync_service",
+    "core.tools",
     "core.vault_index",
-    "core.flywheel",
-    "core.devices",
-    "core.isaac_sim",
-    "core.auth",
-    "tools",
-    "tools.system_agent",
+    "modern_desktop",
+    "modern_desktop.main_window",
+    "modern_desktop.theme",
+    "modern_desktop.workers",
     "sync_server",
 ]
 
-# Keep the onefile under ~50MB — training/torch lives in shell/, not the GUI.
 excludes = [
     "torch",
     "torchvision",
@@ -62,26 +50,22 @@ excludes = [
     "sympy",
     "IPython",
     "notebook",
-    "core.web_companion",
 ]
 
 a = Analysis(
-    ["workstation.py"],
+    ["modern_app.py"],
     pathex=["."],
     binaries=[],
     datas=[
-        ("templates/web_companion.html", "templates"),
         ("assets/occhialini.png", "assets"),
         ("assets/occhialini.ico", "assets"),
+        ("templates/web_companion.html", "templates"),
     ],
     hiddenimports=hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=excludes,
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
@@ -94,20 +78,18 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="Motherbrain",
+    name="Occhialini",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,  # GUI — no terminal window
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    manifest="motherbrain.manifest",  # Per-monitor DPI aware (sharp Tk on Windows)
+    manifest="packaging/occhialini.manifest",
     icon="assets/occhialini.ico",
-    version="packaging/motherbrain_version_info.txt",
+    version="packaging/occhialini_version_info.txt",
 )
